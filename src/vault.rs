@@ -673,6 +673,20 @@ impl Vault {
                 checkpoint("source_removed")?;
             }
             PlanKind::Init => {
+                let config = plan
+                    .config
+                    .as_ref()
+                    .ok_or_else(|| Error::new("recovery_required", "В init-плане нет config"))?;
+                let current_config = self.read_optional(".zettorc")?;
+                if current_config
+                    .as_ref()
+                    .is_some_and(|current| current != config.as_bytes())
+                {
+                    return Err(Error::new(
+                        "conflict",
+                        "Конфигурация отличается от плана init",
+                    ));
+                }
                 if let Some(current) = self.read_optional(&plan.to)? {
                     if hash(&current) != plan.new_hash {
                         return Err(Error::new(
@@ -684,18 +698,7 @@ impl Vault {
                     self.write_atomic(&plan.to, &bytes, false)?;
                 }
                 checkpoint("target_written")?;
-                let config = plan
-                    .config
-                    .as_ref()
-                    .ok_or_else(|| Error::new("recovery_required", "В init-плане нет config"))?;
-                if let Some(current) = self.read_optional(".zettorc")? {
-                    if current != config.as_bytes() {
-                        return Err(Error::new(
-                            "conflict",
-                            "Конфигурация отличается от плана init",
-                        ));
-                    }
-                } else {
+                if current_config.is_none() {
                     self.write_atomic(".zettorc", config.as_bytes(), false)?;
                 }
                 checkpoint("config_written")?;

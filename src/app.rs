@@ -679,6 +679,9 @@ impl App {
             if plan.state == PlanState::Complete && matches!(mode, RecoveryMode::Resume) {
                 return Ok(Outcome::ok(json!({"operation_id":id,"changed":false})));
             }
+            if plan.kind == PlanKind::Init && vault.path(".zettorc")?.try_exists()? {
+                VaultConfig::load(&vault)?.supported()?;
+            }
             let config =
                 if plan.kind == PlanKind::Init {
                     VaultConfig::parse(plan.config.as_deref().ok_or_else(|| {

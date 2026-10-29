@@ -15,6 +15,50 @@ fn setup() -> (tempfile::TempDir, App, String) {
     (dir, App::open(&path).unwrap(), root)
 }
 
+#[test]
+fn init_recovery_checks_current_config_before_writing_root() {
+    for version in [1, 2] {
+        let (_dir, app, root) = setup();
+        let mut plan = app.vault.plans().unwrap().remove(0);
+        plan.state = zetto::vault::PlanState::Prepared;
+        let plan_path = format!(".zetto/recovery/{}/plan.json", plan.operation_id);
+        fs::write(
+            app.vault.path(&plan_path).unwrap(),
+            serde_json::to_vec(&plan).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(app.vault.path(&plan.to).unwrap()).unwrap();
+        let current_root = if version == 1 {
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        } else {
+            &root
+        };
+        let config = format!(
+            "config_version = 1\nformat_version = {version}\nroot_id = \"{current_root}\"\n"
+        );
+        fs::write(app.vault.path(".zettorc").unwrap(), &config).unwrap();
+        let error = App::doctor_at(
+            app.vault.root(),
+            Some(&plan.operation_id),
+            Some(RecoveryMode::Resume),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.code,
+            if version == 2 {
+                "unsupported_format"
+            } else {
+                "conflict"
+            }
+        );
+        assert!(
+            !app.vault.path(&plan.to).unwrap().exists(),
+            "root создан до проверки текущей конфигурации"
+        );
+        assert_eq!(app.vault.read(".zettorc").unwrap(), config.as_bytes());
+    }
+}
+
 fn id(value: &zetto::app::Outcome) -> &str {
     value.data["id"].as_str().unwrap()
 }
