@@ -20,6 +20,23 @@ import unicodedata
 
 BINARY = str(Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/zetto").resolve())
 
+# Session leader остаётся жив для проверки termios: macOS отзывает slave при его выходе.
+PTY_RUNNER = """
+import signal,subprocess,sys,termios
+before = termios.tcgetattr(0)
+child = subprocess.Popen(sys.argv[1:])
+for signum in (signal.SIGINT, signal.SIGWINCH, signal.SIGTERM):
+    signal.signal(signum, lambda signum, frame: child.send_signal(signum))
+code = child.wait()
+assert termios.tcgetattr(0) == before, "termios не восстановлен"
+sys.exit(code if code >= 0 else 128 - code)
+"""
+
+
+def attach_pty():
+    os.setsid()
+    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
 
 def drain_pty(master, timeout=0):
     os.set_blocking(master, False)
@@ -67,18 +84,23 @@ def check_drain_eof():
 
 
 def check_pty_exit():
-    master, slave = pty.openpty()
-    process = subprocess.Popen([sys.executable, "-c", "import fcntl,os,sys,termios; os.setsid(); fcntl.ioctl(0, termios.TIOCSCTTY, 0); sys.stdout.buffer.write(b'x' * 131072); sys.stdout.flush()"], stdin=slave, stdout=slave, stderr=slave)
-    output = bytearray()
-    try:
-        wait_pty_exit(process, lambda timeout: output.extend(b"".join(drain_pty(master, timeout))))
-        assert process.returncode == 0 and output == b"x" * 131072, (process.returncode, len(output))
-    finally:
-        if process.poll() is None:
-            process.kill()
-        os.close(master)
-        os.close(slave)
-        process.wait(timeout=7)
+    for script, expected in (("import sys; sys.stdout.buffer.write(b'x' * 131072); sys.stdout.flush()", 0), ("import tty; tty.setraw(0)", 1)):
+        master, slave = pty.openpty()
+        process = subprocess.Popen([sys.executable, "-c", PTY_RUNNER, sys.executable, "-c", script], stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_pty)
+        output = bytearray()
+        try:
+            wait_pty_exit(process, lambda timeout: output.extend(b"".join(drain_pty(master, timeout))))
+            assert process.returncode == expected, (process.returncode, output)
+            if expected == 0:
+                assert output == b"x" * 131072, len(output)
+            else:
+                assert "termios не восстановлен" in output.decode(), output
+        finally:
+            if process.poll() is None:
+                process.kill()
+            os.close(master)
+            os.close(slave)
+            process.wait(timeout=7)
 
 
 def cli(vault, *args):
@@ -125,13 +147,9 @@ class Pty:
     def __init__(self, vault, env):
         self.master, self.slave = pty.openpty()
         self.resize(100, 28)
-        self.before = termios.tcgetattr(self.slave)
         self.output = bytearray()
         self.cursor_queries = 0
-        def attach():
-            os.setsid()
-            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
-        self.process = subprocess.Popen([BINARY, "--vault", str(vault), "--color", "never", "tui"], stdin=self.slave, stdout=self.slave, stderr=self.slave, env=env, preexec_fn=attach)
+        self.process = subprocess.Popen([sys.executable, "-c", PTY_RUNNER, BINARY, "--vault", str(vault), "--color", "never", "tui"], stdin=self.slave, stdout=self.slave, stderr=self.slave, env=env, preexec_fn=attach_pty)
         self.wait("zetto / Library")
 
     def resize(self, columns, rows):
@@ -194,14 +212,13 @@ class Pty:
     def finish(self, code):
         wait_pty_exit(self.process, self.drain)
         assert self.process.returncode == code, (code, self.process.returncode, self.output.decode(errors="replace"))
-        assert termios.tcgetattr(self.slave) == self.before, "termios не восстановлен"
         assert b"\x1b[?2004l" in self.output and b"\x1b[?1049l" in self.output and b"\x1b[?25h" in self.output, "paste/alternate/cursor не восстановлены"
         os.close(self.master)
         os.close(self.slave)
 
     def abort(self):
         if self.process.poll() is None:
-            self.process.kill()
+            self.process.terminate()
         try:
             wait_pty_exit(self.process, self.drain)
         finally:
