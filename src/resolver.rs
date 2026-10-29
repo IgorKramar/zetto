@@ -116,23 +116,27 @@ pub fn resolve(vault: &Vault, records: &[Record], source: &str, link: &Link) -> 
     if link.kind == LinkKind::Embed {
         return outcome(ResolutionKind::Unsupported, link);
     }
-    if let Some((scheme, _)) = raw.split_once(':') {
+    if let Some((scheme, _)) = raw.split_once(':').filter(|(scheme, _)| uri_scheme(scheme)) {
         let external = ["http", "https", "ftp", "sftp", "ssh", "mailto"]
             .contains(&scheme.to_ascii_lowercase().as_str());
-        return outcome(
-            if link.kind == LinkKind::Wiki {
-                if external {
-                    ResolutionKind::ExternalWiki
+        let dangerous =
+            ["file", "javascript", "data"].contains(&scheme.to_ascii_lowercase().as_str());
+        if external || dangerous || !raw.chars().any(char::is_whitespace) {
+            return outcome(
+                if link.kind == LinkKind::Wiki {
+                    if external {
+                        ResolutionKind::ExternalWiki
+                    } else {
+                        ResolutionKind::Unsafe
+                    }
+                } else if external {
+                    ResolutionKind::External
                 } else {
                     ResolutionKind::Unsafe
-                }
-            } else if external {
-                ResolutionKind::External
-            } else {
-                ResolutionKind::Unsafe
-            },
-            link,
-        );
+                },
+                link,
+            );
+        }
     }
     if raw.contains('#') {
         return outcome(ResolutionKind::Unsupported, link);
@@ -265,6 +269,12 @@ fn relative_path(raw: &str) -> Option<String> {
     } else {
         Some(parts.join("/"))
     }
+}
+
+fn uri_scheme(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes.next().is_some_and(|b| b.is_ascii_alphabetic())
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b"+.-".contains(&b))
 }
 
 fn percent_decode(raw: &str) -> Option<String> {

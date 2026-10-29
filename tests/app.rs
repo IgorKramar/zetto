@@ -260,6 +260,107 @@ fn doctor_resumes_init_with_only_durable_intent() {
     assert_eq!(restored.scan().unwrap().records.len(), 1);
 }
 
+#[test]
+fn repeated_init_does_not_bypass_recovery_format_validation() {
+    use zetto::vault::{PlanKind, PlanState};
+    let (_dir, app, _root) = setup();
+    let mut plan = app
+        .vault
+        .plans()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.kind == PlanKind::Init)
+        .unwrap();
+    plan.state = PlanState::Prepared;
+    plan.config = Some(
+        plan.config
+            .unwrap()
+            .replace("format_version = 1", "format_version = 2"),
+    );
+    fs::remove_file(app.vault.path(&plan.to).unwrap()).unwrap();
+    fs::remove_file(app.vault.path(".zettorc").unwrap()).unwrap();
+    fs::write(
+        app.vault
+            .path(&format!(".zetto/recovery/{}/plan.json", plan.operation_id))
+            .unwrap(),
+        serde_json::to_vec(&plan).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        App::init(app.vault.root(), "Повтор").unwrap_err().code,
+        "unsupported_format"
+    );
+    assert!(!app.vault.path(&plan.to).unwrap().exists());
+    assert!(!app.vault.path(".zettorc").unwrap().exists());
+}
+
+#[test]
+fn link_refuses_to_report_a_connection_inside_literal_blocks() {
+    let (_dir, app, root) = setup();
+    for body in ["```\nпример", "<!-- незакрытый комментарий"] {
+        let draft = app.capture("Буквальный текст", body).unwrap();
+        let before = app.raw(id(&draft)).unwrap();
+        assert_eq!(
+            app.link(id(&draft), &root, None).unwrap_err().code,
+            "validation_failed"
+        );
+        assert_eq!(app.raw(id(&draft)).unwrap(), before);
+    }
+}
+
+#[test]
+fn aliases_with_colons_are_not_mistaken_for_uri_schemes() {
+    let (_dir, app, root) = setup();
+    let record = app.scan().unwrap().find(&root).unwrap().clone();
+    let mut note = record.note;
+    note.fields
+        .insert("aliases".into(), json!(["Вопрос: ответ", "topic: title"]));
+    fs::write(
+        app.vault.path(&record.path).unwrap(),
+        zetto::format::render(&note.fields, &note.body).unwrap(),
+    )
+    .unwrap();
+    for alias in ["ВОПРОС: ОТВЕТ", "topic: title"] {
+        let draft = app.capture("Связь", &format!("[[{alias}]]")).unwrap();
+        assert!(app.publish(id(&draft), None).is_ok(), "{alias}");
+    }
+}
+
+#[test]
+fn recovery_edit_does_not_bypass_duplicate_identity_guard() {
+    let (_dir, app, _root) = setup();
+    let draft = app.capture("Черновик", "Исходник").unwrap();
+    let record = app.scan().unwrap().find(id(&draft)).unwrap().clone();
+    let plan = {
+        let guard = app.vault.lock().unwrap();
+        app.vault.begin_edit(&guard, &record.path).unwrap()
+    };
+    let before = app.vault.read(&record.path).unwrap();
+    fs::write(
+        app.vault.path(&plan.work).unwrap(),
+        String::from_utf8(before.clone())
+            .unwrap()
+            .replace("Исходник", "Новая версия"),
+    )
+    .unwrap();
+    fs::write(
+        app.vault.root().join(format!("{}-copy.md", id(&draft))),
+        &before,
+    )
+    .unwrap();
+    assert_eq!(
+        App::doctor_at(
+            app.vault.root(),
+            Some(&plan.operation_id),
+            Some(RecoveryMode::Resume)
+        )
+        .unwrap_err()
+        .code,
+        "duplicate_id"
+    );
+    assert_eq!(app.vault.read(&record.path).unwrap(), before);
+}
+
 #[cfg(unix)]
 #[test]
 fn doctor_resume_of_interrupted_restore_finishes_undo() {

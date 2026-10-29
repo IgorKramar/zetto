@@ -206,7 +206,24 @@ impl App {
         };
         let text =
             toml::to_string(&config).map_err(|e| Error::new("invalid_config", e.to_string()))?;
-        let vault = Vault::initialize(path, &name, raw.as_bytes(), &text)?;
+        let pending = if path.try_exists()? {
+            let existing = Vault::open(path)?;
+            if existing.path(".zettorc")?.try_exists()? {
+                VaultConfig::load(&existing)?.supported()?;
+            }
+            existing
+                .plans()?
+                .into_iter()
+                .find(|p| p.kind == PlanKind::Init && p.unfinished())
+        } else {
+            None
+        };
+        let vault = if let Some(plan) = pending {
+            Self::doctor_at(path, Some(&plan.operation_id), Some(RecoveryMode::Resume))?;
+            Vault::open(path)?
+        } else {
+            Vault::initialize(path, &name, raw.as_bytes(), &text)?
+        };
         let app = Self::open(vault.root())?;
         let catalog = app.scan()?;
         let record = catalog.find(&app.config.root_id)?;
@@ -499,13 +516,25 @@ impl App {
         update_timestamp(&mut note);
         let next = format::render(&note.fields, &note.body)
             .map_err(|e| Error::new("validation_failed", e))?;
+        let next_record = Record::from_text(original.path.clone(), next);
+        if !next_record
+            .note
+            .links
+            .iter()
+            .any(|link| link.kind == crate::note::LinkKind::Wiki && link.target == target)
+        {
+            return Err(Error::new(
+                "validation_failed",
+                "Ссылка попадает в незакрытый блок кода или HTML; закройте его в редакторе",
+            ));
+        }
         let plan = self.vault.replace(
             guard,
             &original.path,
             &hash(raw.as_bytes()),
-            next.as_bytes(),
+            next_record.raw.as_ref().unwrap().as_bytes(),
         )?;
-        let mut out = Outcome::note(&Record::from_text(original.path.clone(), next), true);
+        let mut out = Outcome::note(&next_record, true);
         out.recovery = plan.recovery_paths();
         if source == target {
             let mut d = Diagnostic::new(
@@ -709,6 +738,23 @@ impl App {
                 };
                 let note = format::parse(&raw);
                 validate_note_id(&note, expected)?;
+                if !restoring && matches!(plan.kind, PlanKind::Edit | PlanKind::Replace) {
+                    let app = Self {
+                        vault: vault.clone(),
+                        config: config.clone(),
+                    };
+                    if app
+                        .scan_with_config(&config, false)?
+                        .records
+                        .iter()
+                        .any(|r| r.path != plan.from && r.path != plan.to && r.claims_id(expected))
+                    {
+                        return Err(Error::new(
+                            "duplicate_id",
+                            "Recovery ID занят другим файлом",
+                        ));
+                    }
+                }
                 if plan.kind == PlanKind::Publish || plan.kind == PlanKind::Init {
                     let app = Self {
                         vault: vault.clone(),
