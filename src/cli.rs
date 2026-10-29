@@ -189,7 +189,7 @@ pub fn run() -> u8 {
             Color::Never => false,
             Color::Auto => io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
         };
-    let result = interrupt::install().and_then(|()| execute(&cli));
+    let result = interrupt::install().and_then(|()| execute(&cli, color));
     match result {
         Ok(Response::Raw(bytes)) => {
             if interrupt::requested() {
@@ -211,7 +211,7 @@ enum Response {
     Outcome(Outcome),
     Raw(Vec<u8>),
 }
-fn execute(cli: &Cli) -> Result<Response> {
+fn execute(cli: &Cli, color: bool) -> Result<Response> {
     if cli.cached {
         return Err(Error::new("usage", "--cached недоступен в v0.1"));
     }
@@ -228,7 +228,15 @@ fn execute(cli: &Cli) -> Result<Response> {
     };
     let interactive = tty && !cli.no_interactive && cli.format == OutputFormat::Table;
     if matches!(command, Command::Tui) {
-        return Err(Error::new("usage", "TUI ещё не подключён"));
+        if !interactive {
+            return Err(Error::new(
+                "interaction_required",
+                "TUI требует stdin/stdout TTY, --format table и разрешённый интерактивный режим",
+            ));
+        }
+        let path = config::discover(cli.vault.as_deref())?;
+        crate::tui::run(App::open(&path)?, color)?;
+        return Ok(Response::Raw(Vec::new()));
     }
     if matches!(command, Command::Edit { .. }) && (!tty || cli.no_interactive) {
         return Err(Error::new(

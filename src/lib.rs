@@ -7,4 +7,5 @@ pub mod format;
 pub mod interrupt;
 pub mod note;
 pub mod resolver;
+pub mod tui;
 pub mod vault;

@@ -22,3 +22,6 @@ toml = "1.1"
 shell-words = "1.1"
 clap = { version = "4.6", features = ["derive"] }
 ctrlc = "3.5.2"
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
+unicode-segmentation = "1.12"
