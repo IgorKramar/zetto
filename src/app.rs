@@ -330,7 +330,6 @@ impl App {
                 d.path = Some(r.path.clone());
                 push_diagnostic(&mut r.note.diagnostics, d);
             }
-            complete &= r.note.writable();
         }
         records.sort_by(|a, b| {
             a.note
@@ -556,43 +555,45 @@ impl App {
         if original.stage == Stage::Published {
             return Ok(Outcome::note(original, false));
         }
-        if let Some(target) = link {
-            self.link_record(&guard, &catalog, id, target, None)
-                .map_err(|mut e| {
-                    e.saved = original.raw.is_some();
-                    e.data = Some(Box::new(json!({"id":id,"path":original.path})));
-                    e
-                })?;
-            catalog = self.scan()?;
-        }
-        let original = self.mutable(&catalog, id)?;
-        let raw = original.raw.as_ref().unwrap();
-        let record = Record::from_text(original.path.clone(), raw.clone());
-        let target = format::filename(id, record.note.title().unwrap_or(""));
-        let diagnostics = publish_diagnostics(
-            &self.vault,
-            &catalog.records,
-            &record,
-            &target,
-            &config.root_id,
-        );
-        if diagnostics.iter().any(|d| d.severity == Severity::Error) {
-            let mut error = Error::new(
-                "publish_rejected",
-                "Черновик сохранён; условия публикации не выполнены",
+        let draft_path = original.path.clone();
+        let saved = original.raw.is_some();
+        (|| {
+            if let Some(target) = link {
+                self.link_record(&guard, &catalog, id, target, None)?;
+                catalog = self.scan()?;
+            }
+            let original = self.mutable(&catalog, id)?;
+            let raw = original.raw.as_ref().unwrap();
+            let record = Record::from_text(original.path.clone(), raw.clone());
+            let target = format::filename(id, record.note.title().unwrap_or(""));
+            let diagnostics = publish_diagnostics(
+                &self.vault,
+                &catalog.records,
+                &record,
+                &target,
+                &config.root_id,
             );
-            error.saved = true;
-            error.data = Some(Box::new(json!({"id":id,"path":record.path})));
-            error.diagnostics = diagnostics;
-            return Err(error);
-        }
-        let plan = self
-            .vault
-            .publish(&guard, &original.path, &target, &hash(raw.as_bytes()))?;
-        let mut out = Outcome::note(&Record::from_text(target, raw.clone()), true);
-        out.diagnostics = diagnostics;
-        out.recovery = plan.recovery_paths();
-        Ok(out)
+            if diagnostics.iter().any(|d| d.severity == Severity::Error) {
+                let mut error = Error::new(
+                    "publish_rejected",
+                    "Черновик сохранён; условия публикации не выполнены",
+                );
+                error.diagnostics = diagnostics;
+                return Err(error);
+            }
+            let plan =
+                self.vault
+                    .publish(&guard, &original.path, &target, &hash(raw.as_bytes()))?;
+            let mut out = Outcome::note(&Record::from_text(target, raw.clone()), true);
+            out.diagnostics = diagnostics;
+            out.recovery = plan.recovery_paths();
+            Ok(out)
+        })()
+        .map_err(|mut error| {
+            error.saved = saved;
+            error.data = Some(Box::new(json!({"id":id,"path":draft_path})));
+            error
+        })
     }
     pub fn new_note(&self, title: &str, body: &str, link: Option<&str>) -> Result<Outcome> {
         let draft = self.capture(title, body)?;

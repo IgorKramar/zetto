@@ -45,6 +45,82 @@ fn cycle_and_saved_draft() {
         "сохранить\n"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn publish_io_failure_retains_saved_draft_and_recovery() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = TempDir::new().unwrap();
+    let root = json(&cli(temp.path(), &["init"]))["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let draft = json(&cli(temp.path(), &["capture", "Текст", "--title", "Мысль"]));
+    let id = draft["data"]["id"].as_str().unwrap();
+    let path = draft["data"]["path"].as_str().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    let out = cli(temp.path(), &["publish", id, "--link", &root]);
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(out.status.code(), Some(4));
+    let failed = json(&out);
+    assert_eq!(failed["error"]["code"], "io");
+    assert_eq!(failed["saved"], true);
+    assert_eq!(failed["status"], "draft_saved");
+    assert_eq!(failed["data"]["id"], id);
+    assert_eq!(failed["data"]["path"], path);
+    let recovery = failed["recovery"].as_array().unwrap();
+    assert!(!recovery.is_empty());
+    assert!(
+        recovery
+            .iter()
+            .all(|p| temp.path().join(p.as_str().unwrap()).exists())
+    );
+    assert!(
+        std::fs::read_to_string(temp.path().join(path))
+            .unwrap()
+            .contains(&format!("[[{root}]]"))
+    );
+    let listed = json(&cli(temp.path(), &["list", "--stage=all"]));
+    assert_eq!(listed["data"]["items"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn list_of_fully_read_invalid_note_is_complete() {
+    let temp = TempDir::new().unwrap();
+    assert!(cli(temp.path(), &["init"]).status.success());
+    std::fs::write(temp.path().join("bad.md"), "---\ntitle: [bad\n---\nТекст").unwrap();
+    let out = cli(temp.path(), &["list"]);
+    assert!(out.status.success());
+    let listed = json(&out);
+    let invalid = listed["data"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["path"] == "bad.md")
+        .unwrap();
+    assert!(invalid["id"].is_null());
+    assert!(
+        listed["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["path"] == "bad.md")
+    );
+    assert_eq!(listed["complete"], true);
+    assert_eq!(listed["truncated"], false);
+    std::fs::write(temp.path().join("bad.md"), [0xff]).unwrap();
+    let unreadable = json(&cli(temp.path(), &["list"]));
+    assert_eq!(unreadable["complete"], false);
+    assert_eq!(unreadable["truncated"], false);
+    assert!(
+        unreadable["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| { d["path"] == "bad.md" && d["rule_id"] == "zetto/file-read-error" })
+    );
+}
+
 #[test]
 fn syntax_and_non_tty_are_structured() {
     let temp = TempDir::new().unwrap();
