@@ -1,120 +1,147 @@
-<div align="right">
+# zetto
 
-**English** · [Русский](./README.ru.md)
+Локальная база связанных заметок в Markdown: CLI и TUI на Rust.
+Автор — Igor Kramar. [MIT](LICENSE).
 
-</div>
+Реализуется **v0.1.0-dev**: минимальный цикл заметки, безопасная запись,
+внешний редактор, восстановление и JSON/JSONL. Это ещё не стабильный выпуск.
+[Принятые контракты](docs/contracts/stage-0.md) описывают дальнейшие версии.
 
-<p align="center">
-  <img src="./assets/icon-zetto.svg" alt="zetto" width="160" height="160" />
-</p>
+## Установка из исходников
 
-<h1 align="center">zetto</h1>
-
-<p align="center">
-  <strong>A terminal-native CLI/TUI for Zettelkasten-style knowledge management, in Rust.</strong>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/status-pre--alpha-d65d0e?style=flat-square" alt="status: pre-alpha" />
-  &nbsp;
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-fabd2f?style=flat-square" alt="license: MIT" /></a>
-  &nbsp;
-  <img src="https://img.shields.io/badge/Rust-CE422B?style=flat-square&logo=rust&logoColor=white" alt="Rust" />
-  &nbsp;
-  <a href="./docs/architecture/decisions/"><img src="https://img.shields.io/badge/ADRs-4-928374?style=flat-square" alt="ADRs: 4" /></a>
-</p>
-
-<p align="center">
-  Previously known as <code>zk</code>. Renamed in <a href="./docs/architecture/decisions/0001-project-name-and-ecosystem-positioning.md">ADR-0001</a> (2026-05-09).
-</p>
-
----
-
-> ### ⚠️ Status: pre-alpha, architectural design phase
->
-> The working tree is intentionally empty. The project is in a structured architectural redesign before code is written: strategy, architecture, decision map, and adversarial ideation are settled first.
->
-> See [`STRATEGY.md`](./STRATEGY.md), [`ARCHITECTURE.md`](./ARCHITECTURE.md), and [`docs/architecture/decision-map.md`](./docs/architecture/decision-map.md) for the current state.
-
-## Why zetto?
-
-A Zettelkasten tool for terminal-native engineers who already live in vim+tmux+git and want their knowledge graph as plain markdown alongside their code — instead of in a separate GUI like Obsidian.
-
-Behavior is dictated by proven Zettelkasten patterns (Luhmann, Ahrens):
-
-- **Atomic notes.** One concept per note.
-- **Link-before-save.** Notes must connect to the existing graph at write time, not later.
-- **Fixed ID schema.** Every note has a stable identifier that survives renames.
-- **No folders-as-taxonomy.** Structure emerges from links, not directories.
-- **No tags-as-link-replacement.** Tags describe; links connect.
-
-The tool composes with `$EDITOR`, ripgrep, fzf, and git rather than reimplementing them.
-
-Read [`STRATEGY.md`](./STRATEGY.md) for the full framing.
-
-## A note on the name
-
-`zetto` derives from German *Zettel* (note card) — the root of the Zettelkasten methodology itself. In Japanese, ゼット (zetto) is also how the letter Z is pronounced; the icon picks up this cultural anchor — ゼ in the center is the syllable closest to "Z".
-
-This project was renamed from `zk` to `zetto` in [ADR-0001](./docs/architecture/decisions/0001-project-name-and-ecosystem-positioning.md) to avoid confusion with [zk-org/zk](https://github.com/zk-org/zk), an established Go-based Zettelkasten CLI in the same niche (~2.6k stars). The two projects have different goals:
-
-|                  | zk-org/zk                                                | **zetto** (this project)                              |
-| ---------------- | -------------------------------------------------------- | ----------------------------------------------------- |
-| **Methodology**  | agnostic — orphans, deep folders, free tags allowed      | enforced — research-grounded constraints at write time |
-| **Stack**        | Go                                                       | Rust                                                  |
-| **License**      | GPLv3                                                    | MIT                                                   |
-
-Search results for `zk` from before May 2026 still lead here — GitHub auto-redirects from `IgorKramar/zk`.
-
-## Reading order
-
-If you want to understand where this is heading, read in this order:
-
-1. [`STRATEGY.md`](./STRATEGY.md) — what zetto is, who it serves, key metrics, tracks of work.
-2. [`ARCHITECTURE.md`](./ARCHITECTURE.md) — system summary, quality attributes (with latency budget breakdown), constraints, anti-patterns, open questions.
-3. [`docs/architecture/decision-map.md`](./docs/architecture/decision-map.md) — open architectural decisions in four groups (on-disk contract, engine internals, surface/UX, interop & ecosystem) with dependencies and a proposed order.
-4. [`docs/ideation/`](./docs/ideation/) — outputs of brainstorming and idea-filtering passes that feed into decisions.
-5. [`docs/architecture/decisions/`](./docs/architecture/decisions/) — accepted ADRs.
-6. [`docs/architecture/research/`](./docs/architecture/research/) — discovery, design, and observation reports.
-
-## Why the working tree is empty
-
-A previous implementation existed in this repository — `Cargo.toml`, `src/{cli,commands,notes,tags,templates,tui,editor,config}`, with UUID IDs, YAML frontmatter, an in-memory HashMap graph, search by tags / title / content / regex / glob, and editor delegation to vim/nvim/code/emacs. The last real commit (`293a1e4 feat: add tui style`, November 2024) is preserved in the git history.
-
-That implementation was a spike — useful for learning, but the choices it embedded were made before `STRATEGY.md` was written. After articulating the strategy (research-grounded constraints, lintable methodology, terminal-native distribution), the prior implementation no longer matches the intended product. It is intentionally not in the working tree; the redesign starts from architecture, not from code refactoring.
-
-To inspect a prior file as historical prior-art:
+Нужен Rust 1.89 или новее:
 
 ```sh
-git show 293a1e4:src/notes/store.rs | less
-git show 293a1e4:src/cli/mod.rs    | less
+cargo install --path . --locked
+zetto --help
 ```
 
-Commits before `293a1e4` are part of the historical record; nothing prior to the architectural reset is treated as a contract.
+Основные операции работают без rg, fzf, git и специальных шрифтов.
+Для `edit` нужен установленный редактор.
 
-## Project scaffolding
+## Первый цикл
 
-This repository uses two complementary Claude Code plugins to drive the architectural and feature work:
+```sh
+zetto --vault ./notes init
+zetto --vault ./notes capture 'Мысль, которую нужно сохранить' --title 'Пример'
+zetto --vault ./notes list --stage all
+```
 
-- **[`archforge`](https://github.com/IgorKramar/archforge-marketplace)** — architecture cycle (Discover → Research → Design → Decide → Document → Review). All architectural decisions live in `docs/architecture/`.
-- **`compound-engineering`** — feature workflow (Brainstorm → Plan → Work → Review → Compound). Feature-level artifacts live in `docs/{ideation,brainstorms,plans,solutions}/`.
+`init` выводит ID корня, `capture` — ID и путь черновика в `inbox/`.
+В следующих командах замените `DRAFT_ID` и `ROOT_ID` полными ID из вывода:
 
-The interleaving rules (when each cycle hands off to the other) live in [`AGENTS.md`](./AGENTS.md).
+```sh
+zetto --vault ./notes link DRAFT_ID ROOT_ID
+zetto --vault ./notes publish DRAFT_ID
+zetto --vault ./notes show DRAFT_ID --raw
+```
 
-## Contributing
+Capture сохраняет мысль без связи, допускает пустой заголовок. Публикация
+требует заголовок, разрешённые внутренние ссылки и связь на другую
+опубликованную заметку. Корень имеет явное исключение из последнего условия.
+Отказ публикации оставляет черновик. `new` объединяет capture и publish;
+без готового текста в TTY открывает редактор и запрашивает ID связи.
 
-Not yet open for outside contributions — the architectural work is structured and one-author at this stage. Once the first ADRs are accepted and the on-disk format spec (`format-v1`) is published, this section will be expanded with a setup guide and a contribution flow.
+В файлах обычный YAML-frontmatter и Markdown. Чтение не переименовывает
+заметки и не меняет `updated`. Неизвестные YAML-поля сохраняют значения;
+комментарии, порядок ключей и кавычки могут измениться при записи метаданных.
 
-If the project is interesting in its current state, the most useful feedback is on the open questions in [`decision-map.md`](./docs/architecture/decision-map.md).
+## Терминальный интерфейс
 
-## License
+```sh
+export EDITOR=nvim
+zetto --vault ./notes tui
+```
 
-[MIT](./LICENSE) © 2026 Igor Kramar.
+| Клавиши | Действие |
+|---|---|
+| Стрелки / j / k | Выбор заметки или прокрутка предпросмотра |
+| i / Esc | Library ↔ Inbox |
+| Tab | Список ↔ предпросмотр; в форме — заголовок ↔ тело |
+| c / n | Capture / новая заметка с выбором связи и публикацией |
+| e / l / p | Внешний редактор / добавить связь / опубликовать |
+| r / ? / q | Сверить файлы / справка / выход |
+| Ctrl-S / F2 | Сохранить форму; Enter в теле добавляет строку |
 
-The on-disk format specification (`format-v1`) will receive its own licensing decision when published — see decision **A5** in [`decision-map.md`](./docs/architecture/decision-map.md).
+В поле ввода буквы навигации остаются текстом. Esc предлагает сохранить,
+продолжить или явно отбросить ввод; по умолчанию — продолжить. Ctrl-C/SIGINT
+сохраняет принятый ввод в inbox перед выходом. Если запись недоступна,
+форма остаётся открытой с ошибкой. Resize сохраняет ввод и выбор.
+Редактор работает с устойчивой копией, терминал восстанавливается перед
+его запуском и после выхода из TUI.
 
-<p align="center">
-  <sub>Built with <a href="https://github.com/anthropics/claude-code">Claude Code</a> ·
-  Architecture by <a href="https://github.com/IgorKramar/archforge-marketplace">archforge</a> ·
-  Workflow by <a href="https://github.com/EveryInc/compound-engineering">compound-engineering</a></sub>
-</p>
+При ширине 60–79 колонок Tab меняет единственную область. В ещё меньшем
+окне показана подсказка; q/Esc сохраняет незавершённый ввод перед выходом.
+TUI требует stdin и stdout TTY. `NO_COLOR=1` или `--color never` отключает цвета.
+
+## Скрипты и настройки
+
+```sh
+printf 'Тело заметки\n' | zetto --vault ./notes --format json capture --stdin
+zetto --vault ./notes --format jsonl list --stage inbox
+zetto --vault ./notes --no-interactive capture --file ./thought.md
+```
+
+Pipe читается только с `--stdin`. Без TTY приложение не задаёт вопросов
+и не запускает редактор. JSON содержит `saved`, стабильный `error.code`,
+диагностики и пути recovery; JSONL завершается строкой `summary`.
+[Полный контракт команд и кодов завершения](docs/contracts/cli-v1.md).
+
+Vault: `--vault` → `ZETTO_VAULT` → ближайшая `.zettorc` вверх от cwd →
+`~/.zetto/notes`. Он не создаётся скрыто. Редактор: `editor = ["nvim", "-f"]`
+в `$XDG_CONFIG_HOME/zetto/config.toml` (по умолчанию `~/.config`) →
+`VISUAL` → `EDITOR`. Команда разбирается в argv, shell не запускается.
+
+## Восстановление и резервные копии
+
+```sh
+zetto --vault ./notes doctor
+zetto --vault ./notes doctor --operation OPERATION_ID --resume
+zetto --vault ./notes doctor --operation OPERATION_ID --restore
+```
+
+`doctor` показывает незавершённые операции. Resume продолжает сохранённый
+план после проверок; restore отменяет перенос или замену, сохраняя изменённые
+внешним редактором версии. При конфликте сначала сравните оригинал,
+`backup.md` и `work.md` по указанным путям. Автоматического слияния нет.
+Прерванный `init` продолжается повторным `init` или через `doctor --resume`;
+отмена `init` не удаляет хранилище.
+
+В backup включайте весь vault: заметки, `inbox`, `assets`, `.zettorc` и
+`.zetto/recovery`. Recovery — пользовательские данные, автоматической очистки
+нет. Не удаляйте `.zetto/locks` для обхода занятой OS-блокировки.
+
+Гарантии рассчитаны на локальную файловую систему и процессы zetto.
+Произвольный внешний редактор или git не участвует в блокировке: хеши
+обнаруживают изменения, backup помогает восстановлению, общей транзакции
+с внешними программами нет. Незавершённый ввод до capture не переживает
+SIGKILL или потерю питания. Recovery дополняет независимые резервные копии.
+
+## Разработка и границы v0.1
+
+```sh
+cargo test --locked
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+python3 tools/corpus.py --self-check
+cargo build --locked
+python3 tools/test_tui.py
+```
+
+PTY-проверка проходит ввод, редактор, связь и публикацию на одном vault,
+параллельный CLI, Unicode/resize, ошибки, прерывания и восстановление termios.
+CI проверяет Linux на MSRV/stable и macOS на stable. Полная платформенная
+и терминальная матрица относится к beta.
+
+Каталог пока строится полным обходом в памяти. Сверка TUI синхронная и
+запускается по `r` либо после операции. Поиск, SQLite/FTS, watcher — v0.2;
+полные Library/Focus/Inbox и палитра — v0.3. Текущая форма поддерживает ввод
+и Backspace; полноценное редактирование выполняет внешний редактор.
+
+[Архитектура](ARCHITECTURE.md) · [format-v1](docs/format-v1.md) ·
+[план v0.1](docs/plans/2026-10-29-v0.1-minimal-note-cycle.md) ·
+[контракт TUI](docs/contracts/tui-v1.md).
+
+Прежний прототип назывался `zk`; его код сохранён в истории до `293a1e4`.
+Текущая реализация следует ADR-0005–0008. Публикация релиза — отдельное
+действие владельца после приёмки.

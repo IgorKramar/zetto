@@ -1,0 +1,49 @@
+name: Проверки
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: ${{ matrix.os }} / Rust ${{ matrix.rust }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rust: '1.89.0'
+          - os: ubuntu-latest
+            rust: stable
+          - os: macos-latest
+            rust: stable
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+      - name: Форматирование
+        if: matrix.rust == 'stable'
+        run: cargo fmt --check
+      - name: Статические проверки
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Тесты
+        run: cargo test --locked
+      - name: Корпуса
+        run: python3 tools/corpus.py --self-check
+      - name: Совместимость YAML-стенда
+        run: cargo test --locked --manifest-path tools/format-probe/Cargo.toml
+      - name: Сборка бинарника
+        run: cargo build --locked
+      - name: Терминальный сценарий
+        run: python3 tools/test_tui.py
