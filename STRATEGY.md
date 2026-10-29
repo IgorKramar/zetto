@@ -1,6 +1,6 @@
 ---
 name: zetto
-last_updated: 2026-05-09
+last_updated: 2026-10-29
 ---
 
 # zetto Strategy
@@ -11,7 +11,7 @@ last_updated: 2026-05-09
 
 ## Our approach
 
-Поведение продукта диктуется доказанными паттернами Zettelkasten (Luhmann/Ahrens): atomic notes, link-before-save, фиксированная ID-схема, отказ от папок-как-таксономии и тегов-как-замены-ссылок. Research-grounded constraints держат plain-text-first модель от деградации в очередной markdown-редактор — продукт отказывается от анти-паттернов, даже если их просит пользователь.
+Поведение продукта диктуется доказанными паттернами Zettelkasten (Luhmann/Ahrens): atomic notes, link-before-publish, фиксированная ID-схема, отказ от папок-как-таксономии и тегов-как-замены-ссылок. Быстрый capture сохраняет мысль без связи в inbox; publish требует осмысленной связи на другую опубликованную заметку. Одно явное root-исключение создаётся при init. Принятый контракт — [ADR-0008](docs/architecture/decisions/0008-capture-publish-and-root.md). Размер заметки остаётся советом, а структурные защиты данных обязательны.
 
 ## Who it's for
 
@@ -19,11 +19,13 @@ last_updated: 2026-05-09
 
 ## Key metrics
 
-- **Orphan-note ratio** — доля заметок без исходящих ссылок; цель <5%. Проверяет, что constraint «link-before-save» работает. *Leading.*
-- **Avg outgoing links per note** — средняя плотность связей; <1.5 = деградация Zettelkasten. *Leading.*
-- **Capture latency** — медиана времени от запуска `zetto new` до сохранения связанной заметки; цель <5 сек. *Leading.*
-- **Cross-session usage frequency** — заметки, созданные/отредактированные внутри coding-сессии (тот же tmux/git-repo как код). Регрессирует, если zetto вытесняется обратно в Obsidian. *Leading.*
-- **Median time-to-first-link** — как быстро новый пользователь проходит Zettelkasten-инициацию (создание первой связанной заметки). *Lagging.*
+- **Orphan-note ratio** — доля опубликованных заметок без исходящей связи на другую опубликованную заметку, исключая явно назначенный root; цель <5%. Inbox учитывается отдельно. *Leading.*
+- **Avg outgoing links per note** — плотность связей опубликованной базы; диагностический показатель, без требования добавлять связи ради числа. *Leading.*
+- **Capture latency** — машинное время от подтверждения готового текста до долговечного сохранения в inbox; отдельно время пользователя «готовая мысль → inbox», ориентир <5 сек. *Leading.*
+- **Publish latency** — системное время проверки и переноса отдельно от времени выбора связи человеком. *Leading.*
+- **Inbox size / age / time-to-publish** — число и возраст черновиков, время до публикации; рост inbox не должен скрываться улучшением доли сирот. *Leading.*
+- **Cross-session usage frequency** — работа с заметками внутри привычной coding-сессии (vim/tmux/git). *Leading.*
+- **Median time-to-first-link** — время до первой осмысленной связи у нового пользователя. *Lagging.*
 
 ## Tracks
 
@@ -37,7 +39,7 @@ _Why it serves the approach:_ без надёжного графа constraints (
 
 Single-keystroke capture, fuzzy-linking, навигация по графу, инкрементальный поиск, бюджет латентности по операциям.
 
-_Why it serves the approach:_ constraints должны срабатывать в момент работы, иначе на них забьют. Воплощает «link-before-save» в реальном UX.
+_Why it serves the approach:_ constraints должны срабатывать в момент работы, иначе на них забьют. Воплощает capture → обработка → link-before-publish в реальном UX.
 
 ### Toolchain interop
 

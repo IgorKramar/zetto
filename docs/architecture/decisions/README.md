@@ -6,6 +6,10 @@
 
 | # | Date | Status | Decision |
 |---|---|---|---|
+| [0008](./0008-capture-publish-and-root.md) | 2026-10-29 | Accepted | Capture/publish, root и уточнение STRATEGY |
+| [0007](./0007-shared-cli-tui-core.md) | 2026-10-29 | Accepted | Общее ядро CLI/TUI |
+| [0006](./0006-safe-writes-and-recovery.md) | 2026-10-29 | Accepted | Конкурентная запись и recovery |
+| [0005](./0005-format-layout-and-resolution.md) | 2026-10-29 | Accepted | Формат, размещение, resolver, YAML preservation |
 | [0004](./0004-frontmatter-convention.md) | 2026-05-09 | Accepted | Frontmatter convention: required `id`/`title`; standard optional `tags`/`aliases`/`created`/`updated`; `x-*` for extensions; lenient schema with lint warns; hand-rolled write |
 | [0003](./0003-link-representation.md) | 2026-05-09 | Accepted | Link representation: wikilink-primary `[[ULID]]` / `[[ULID|display]]`; canonical markdown read-compat; embeds/anchors/block-refs deferred to v2 with triggers |
 | [0002](./0002-note-id-scheme-and-filename-layout.md) | 2026-05-09 | Accepted | Note ID scheme and filename layout: ULID in YAML frontmatter, `<ULID>-<slug>.md` filename |

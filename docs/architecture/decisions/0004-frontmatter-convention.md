@@ -1,5 +1,16 @@
 # ADR-0004: Frontmatter convention
 
+> Принятые уточнения от 2026-10-29:
+> [ADR-0005](0005-format-layout-and-resolution.md) заменяет alias-resolver,
+> validation pipeline, write strategy и обещание verbatim: сохраняются
+> значения, не оформление; неверные optional-поля не скрывают заметку.
+> [ADR-0006](0006-safe-writes-and-recovery.md) заменяет single-writer/mtime
+> и протокол записи; [ADR-0008](0008-capture-publish-and-root.md) заменяет
+> запрет пустого title в inbox и скрытое получение title из H1.
+> `updated` меняется только управляемой записью по [format-v1](../../format-v1.md).
+> Обязательные поля id/title и namespace расширений сохраняются;
+> исторический текст ниже оставлен для прослеживаемости.
+
 - **Date**: 2026-05-09
 - **Status**: Accepted
 - **Authors**: Igor Kramar

@@ -10,7 +10,16 @@
 
 ## 1. System summary
 
-`zetto` — это CLI/TUI инструмент для ведения базы знаний в формате Zettelkasten, написанный на Rust. Первичный пользователь — terminal-native инженер/исследователь, живущий в vim+tmux+git, который хочет вести граф знаний как plain-text файлы внутри своей цепочки инструментов, а не в тяжёлом GUI типа Obsidian. Система research-grounded: она *принуждает* к Zettelkasten-паттернам (atomic notes, link-before-save, фиксированная ID-схема), а не даёт ещё один настраиваемый markdown-редактор. Заметки живут как plain markdown на диске; продукт композируется с `$EDITOR`, ripgrep, fzf и git, а не переизобретает их.
+`zetto` — проект локального CLI/TUI для связанной базы знаний на Rust.
+Принят контракт Markdown-хранилища, общего ядра и разделения capture/publish.
+Первичный пользователь работает в vim/tmux/git. CLI и TUI равноправны;
+rg/fzf — необязательные внешние инструменты. Сохранение мысли в inbox
+не требует связи, публикация требует связи на другую опубликованную заметку
+с одним явным root-исключением.
+
+**Текущее состояние:** этап 0 принят владельцем 2026-10-29. В дереве есть
+контракты, корпуса и изолированный YAML-стенд; приложение ещё не реализовано.
+Реализация начинается с v0.1 по [принятому пакету](docs/contracts/stage-0.md).
 
 Проект переименован из `zk` в `zetto` в [ADR-0001](./docs/architecture/decisions/0001-project-name-and-ecosystem-positioning.md) (2026-05-09).
 
@@ -20,77 +29,44 @@
 
 ## 2. Quality attributes
 
-<!-- fill in based on real requirements; ниже — то, что прямо следует из STRATEGY.md метрик -->
-
-| Attribute | Target | Notes |
+| Атрибут | Принятый критерий | Проверка |
 |---|---|---|
-| Capture latency (p50) | <5s end-to-end (`zetto new` → сохранённая связанная заметка) | Метрика из STRATEGY. Бюджет распределён по этапам — см. подтаблицу ниже. |
-| Cold start | _TBD_ | Должен быть на порядок ниже Electron-альтернатив. Numerify когда появится baseline. |
-| Resource footprint | _TBD_ | Single-binary; RAM/CPU при idle TUI. |
-| Throughput на индексации | _TBD_ | Сколько заметок в секунду парсится при cold rebuild графа. Важно для Note graph engine. |
-| Availability | N/A | Локальный CLI, не сервис. |
-| Durability данных | Zero data loss | Заметки = plain markdown в git. Любая операция должна оставлять рабочий tree в консистентном состоянии. |
-| Geographic distribution | N/A | Локальный, single-machine. |
+| Capture | Подтверждённое сохранение без необходимости немедленно выбрать связь | Машинное время отдельно от пользовательского сценария <5 сек |
+| Publish | Проверки структуры и связности перед переносом | Время системы отдельно от выбора связи |
+| Сохранность | Backup/recovery до замены, no-clobber при создании, обнаруженные конфликты сохраняются | Реальная ФС и аварийные сценарии v0.1; [ADR-0006](docs/architecture/decisions/0006-safe-writes-and-recovery.md) |
+| Свежесть | Явные full/stat/cached; индекс производный | v0.2: равенство full/incremental графа |
+| Ресурсы и масштаб | Снятые startup/search/capture/idle CPU/RAM на фиксированных корпусах 5k/50k | Корпуса подготовлены, производительность приложения пока не измерена |
+| Поддерживаемая среда | Linux/macOS, локальная ФС, один автор и несколько процессов | Платформенная/PTY матрица до 1.0 |
 
-### 2.1 Capture latency budget (распределение по этапам)
+### 2.1 Системные бюджеты
 
-Добавлено `/archforge:observe` 2026-05-09 (находка O-8). Общий бюджет <5 с end-to-end (p50) распределён по этапам ниже. Любое решение в A/B/C должно явно указать свой бюджет внутри общего; превышение бюджета этапом — повод для ADR-отклонения.
-
-| Этап | Бюджет (p50) | Зависит от | Примечание |
-|---|---|---|---|
-| Process startup | <50 ms | Rust binary, no runtime warm-up | На холодном старте (первый запуск в сессии). При активной TUI/демоне — амортизируется до нуля. |
-| Index lookup (для линкования) | <100 ms | B1 | Если B1 = in-memory rebuild — этот бюджет нарушается на 1k+ заметок; если persistent или event-sourced — bottleneck не здесь. |
-| TUI render & input handling | <200 ms | C3, C4 | Включает рендер picker-а ссылок, инкрементальный фильтр. На прогретом TUI большинство кадров <16 ms. |
-| Fuzzy-link picker (поиск кандидатов) | <500 ms | A2, B1, D1 | Самый «латучий» этап; может уйти в delegate (skim/fzf) или в индекс. |
-| Constraint check (`link-before-save` etc.) | <100 ms | C2a, C2b | Применяется только в `prep`-режиме при варианте C4=split (см. C4 в decision-map). В `service`-режиме — пропуск. |
-| Save (запись на диск + index update) | <300 ms | A5 (versioning), B1 | FS-write идемпотентен; обновление индекса инкрементально. |
-| **Reserve** | **~3500 ms** | — | Запас под рассуждение пользователя, реальный набор текста, сетевые задержки sync (если включён через D2). |
-
-Сумма detached-бюджетов системы ≈1250 ms; ≥3500 ms — это user-time, не машинное. Если все системные этапы в сумме превышают 1500 ms на p50 — продукт не достигает метрики STRATEGY на масштабе 1k+ заметок, и одно из решений (B1, C4) подлежит пересмотру.
+Исходные ориентиры сохраняются как бюджеты для измерений, а не результаты
+эксперимента: startup <50 ms p50; lookup <100 ms; render/input <200 ms;
+picker <500 ms; publish-check <100 ms; подтверждённая запись <300 ms.
+Время набора и осмысления пользователем в эти значения не входит.
+Capture не ждёт полной сверки графа. Обход/stat измеряется отдельно;
+превышение бюджета требует измеренного исправления либо явного пересмотра.
+Протокол не обещает общей транзакции с внешним редактором или защиту
+от физической поломки диска; recovery дополняет независимый backup.
 
 ---
 
 ## 3. High-level structure
 
-<!-- C4 Container-level (L2). Pre-filled из истории git и STRATEGY.md; уточняется по ходу work. -->
+По [ADR-0007](docs/architecture/decisions/0007-shared-cli-tui-core.md)
+приложение будет одним Cargo package с библиотекой и бинарником.
+`cli`/`tui` вызывают `app`; операции используют `note`/`format`, `vault`,
+`editor` и `config`. `app` не зависит от stdout, клавиатуры или terminal UI.
+`vault` отвечает за пути, блокировки, backup и recovery; `format` не знает ФС.
+В v0.1 каталог заметок производный, в памяти; индекс SQLite относится к v0.2.
 
-```mermaid
-graph TB
-    User["Terminal-native пользователь"]
-
-    subgraph zetto["zetto (single Rust binary)"]
-        CLI["<b>CLI / argparse</b><br/>[Rust + clap]<br/>Subcommand routing"]
-        TUI["<b>TUI</b><br/>[Rust + ratatui]<br/>Capture flow, navigation,<br/>fuzzy linking"]
-        Commands["<b>Commands</b><br/>new/open/search/tag/...<br/>Per-subcommand logic"]
-        Notes["<b>Notes module</b><br/>Store, metadata, IDs,<br/>link parsing"]
-        Tags["<b>Tags module</b><br/>Tag index"]
-        Templates["<b>Templates</b><br/>Note skeletons"]
-        Config["<b>Config</b><br/>~/.config/zetto, .zettorc"]
-        Editor["<b>Editor delegate</b><br/>Spawn $EDITOR"]
-    end
-
-    Notes_dir[("<b>Notes directory</b><br/>plain .md files<br/>(in git repo)")]
-    External_editor["$EDITOR<br/>(vim/nvim/code/...)"]
-    External_tools["ripgrep / fzf / git"]
-
-    User -->|terminal| CLI
-    User -->|terminal| TUI
-    CLI --> Commands
-    TUI --> Commands
-    Commands --> Notes
-    Commands --> Tags
-    Commands --> Templates
-    Commands --> Editor
-    Commands --> Config
-    Notes -->|read/write| Notes_dir
-    Editor -->|spawn| External_editor
-    External_editor -->|edit files| Notes_dir
-    External_tools -.->|composable| Notes_dir
-```
-
-_Заглушка C4 L2; точные контейнеры/границы фиксируются по мере принятия ADR (особенно после разрешения Open question 3 — индекс)._
-
-L3-детализация конкретных модулей живёт в [`docs/architecture/diagrams/`](./docs/architecture/diagrams/).
+`tools/format-probe` — отдельный проверочный пакет этапа 0, не пакет приложения.
+Он снимает неопределённость YAML и не задаёт публичный Rust API.
+Корпуса и генератор находятся в `tests/corpus` и `tools/corpus.py`.
+Нормативный [format-v1](docs/format-v1.md),
+[CLI/JSON](docs/contracts/cli-v1.md), [макеты TUI](docs/contracts/tui-v1.md).
+Исходная [L3-схема](docs/architecture/diagrams/c4-l3-zetto-1.0-proposal.md)
+остаётся предложением полной 1.0; она не свидетельствует о реализации.
 
 ---
 
@@ -108,16 +84,24 @@ L3-детализация конкретных модулей живёт в [`do
 
 ## 5. Decision index
 
-<!-- ADR-ов пока нет. Первая запись появится после первого `/archforge:cycle` или `/archforge:adr`. -->
+<!-- Принятые ADR; прежние решения уточняются новыми, исторический текст сохраняется. -->
 
 | # | Date | Status | Decision |
 |---|---|---|---|
+| [0008](./docs/architecture/decisions/0008-capture-publish-and-root.md) | 2026-10-29 | Accepted | Capture без связи, строгая публикация, явный root; уточнение STRATEGY |
+| [0007](./docs/architecture/decisions/0007-shared-cli-tui-core.md) | 2026-10-29 | Accepted | Общее ядро CLI/TUI, один Cargo package |
+| [0006](./docs/architecture/decisions/0006-safe-writes-and-recovery.md) | 2026-10-29 | Accepted | Короткий lock, hash/backup, устойчивые рабочие копии и recovery-план |
+| [0005](./docs/architecture/decisions/0005-format-layout-and-resolution.md) | 2026-10-29 | Accepted | Формат/размещение, read-only чтение, однозначный resolver и YAML preservation |
 | [0004](./docs/architecture/decisions/0004-frontmatter-convention.md) | 2026-05-09 | Accepted | Frontmatter convention: required `id`/`title`; standard optional `tags`/`aliases`/`created`/`updated`; `x-*` for extensions; lenient schema with lint warns; hand-rolled write |
 | [0003](./docs/architecture/decisions/0003-link-representation.md) | 2026-05-09 | Accepted | Link representation: wikilink-primary `[[ULID]]` / `[[ULID|display]]`; markdown read-compat; embeds/anchors/block-refs deferred to v2 with triggers |
 | [0002](./docs/architecture/decisions/0002-note-id-scheme-and-filename-layout.md) | 2026-05-09 | Accepted | Note ID scheme and filename layout: ULID in YAML frontmatter, `<ULID>-<slug>.md` filename |
 | [0001](./docs/architecture/decisions/0001-project-name-and-ecosystem-positioning.md) | 2026-05-09 | Accepted | Rename project from `zk` to `zetto` |
 
 ADR файлы живут в [`docs/architecture/decisions/`](./docs/architecture/decisions/).
+
+Пакет этапа 0 [принят владельцем](./docs/contracts/stage-0.md).
+ADR-0005–0008 имеют приоритет над перечисленными в них разделами ADR-0002–0004;
+остальные положения прежних решений сохраняются.
 
 ---
 
@@ -128,8 +112,8 @@ ADR файлы живут в [`docs/architecture/decisions/`](./docs/architectur
 - ~~**Q1. Схема ID заметок.**~~ — закрыт [ADR-0002](./docs/architecture/decisions/0002-note-id-scheme-and-filename-layout.md): ULID во frontmatter + `<ULID>-<slug>.md` filename.
 - ~~**Q2. Синтаксис ссылок.**~~ — закрыт [ADR-0003](./docs/architecture/decisions/0003-link-representation.md): wikilink-primary `[[ULID]]` / `[[ULID|display]]` + canonical markdown read-compat; embeds/anchors/block-refs deferred to v2.
 - **Q3. Хранилище графа/индекса.** In-memory rebuild при каждом запуске (zero state, but cold-start cost) vs persistent index (sqlite/sled/JSON sidecar — быстро, но invalidation и sync). Критично для Capture latency и Note graph engine track.
-- **Q4. Граница TUI vs CLI-pipe.** Какие операции — только TUI (живая навигация, fuzzy-linking графа) vs композируемые pipe-friendly CLI (`zetto list`, `zetto new`, `zetto lint`). Это контракт Toolchain interop track и определяет, можно ли использовать `zetto` из shell-скриптов и редакторных плагинов.
-- **Q5. Степень принуждения constraints.** `zetto new` *блокирует* сохранение без исходящей ссылки vs предупреждает vs только flag в `zetto lint`. Прямой trade-off между Capture latency (быстрее = меньше принуждения) и Orphan-note ratio (строже = ниже orphan rate). Определяет, воспринимается ли Methodology enforcement как помощь или как враждебность.
+- ~~**Q4. Граница TUI vs CLI-pipe.**~~ — закрыт [ADR-0007](docs/architecture/decisions/0007-shared-cli-tui-core.md): общее ядро, независимые адаптеры и машинный контракт с первой команды.
+- ~~**Q5. Степень принуждения constraints.**~~ — закрыт [ADR-0008](docs/architecture/decisions/0008-capture-publish-and-root.md): capture без связи; строгость при publish, видимое root-исключение.
 
 ---
 
@@ -142,7 +126,7 @@ ADR файлы живут в [`docs/architecture/decisions/`](./docs/architectur
 - **Теги не заменяют ссылки.** Теги — facet, ссылки — связи. Если фича позволяет tagging вместо linking — это анти-паттерн.
 - **Никакого Electron / web-UI.** Уничтожает основной тезис продукта.
 - **Никакого облачного sync как зависимости.** Sync = пользовательский git (или другой механизм поверх файлов). Любое cloud-coupling — анти-паттерн.
-- **Не переизобретать ripgrep/fzf/git.** Если задача решается композицией существующих CLI — `zetto` не реализует её сам (см. Track «Toolchain interop»).
+- **Не делать rg/fzf/git обязательной средой выполнения.** Внешние инструменты композируются с CLI; базовые сценарии работают на чистой установке по принятому контракту этапа 0.
 - **Никаких mouse-only путей в TUI.** Каждое действие должно иметь keybinding; mouse — опционально.
 
 <!-- Дополнено `/archforge:observe` 2026-05-09 (находка O-12 — формализация trех subject-replacement идей, отвергнутых ideation): -->

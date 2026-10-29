@@ -22,6 +22,10 @@ section 5.
 
 | # | Date | Status | Decision |
 |---|---|---|---|
+| [0008](./decisions/0008-capture-publish-and-root.md) | 2026-10-29 | Accepted | Capture/publish и root |
+| [0007](./decisions/0007-shared-cli-tui-core.md) | 2026-10-29 | Accepted | Общее ядро CLI/TUI |
+| [0006](./decisions/0006-safe-writes-and-recovery.md) | 2026-10-29 | Accepted | Безопасная запись и recovery |
+| [0005](./decisions/0005-format-layout-and-resolution.md) | 2026-10-29 | Accepted | Формат/размещение/resolver и YAML |
 | [0004](./decisions/0004-frontmatter-convention.md) | 2026-05-09 | Accepted | Frontmatter convention: required `id`/`title`; standard optional `tags`/`aliases`/`created`/`updated`; `x-*` for extensions; lenient schema |
 | [0003](./decisions/0003-link-representation.md) | 2026-05-09 | Accepted | Link representation: wikilink-primary `[[ULID]]` / `[[ULID|display]]`; markdown read-compat; embeds/anchors/block-refs deferred to v2 with triggers |
 | [0002](./decisions/0002-note-id-scheme-and-filename-layout.md) | 2026-05-09 | Accepted | Note ID scheme and filename layout: ULID in YAML frontmatter, `<ULID>-<slug>.md` filename |
