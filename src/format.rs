@@ -95,9 +95,9 @@ pub fn yaml_diagnostics(value: &Value) -> Vec<String> {
     }
     for key in ["created", "updated"] {
         if let Some(field) = fields.get(key)
-            && !field
+            && field
                 .as_str()
-                .is_some_and(|s| chrono::DateTime::parse_from_rfc3339(s).is_ok())
+                .is_none_or(|s| chrono::DateTime::parse_from_rfc3339(s).is_err())
         {
             result.push(format!("zetto/non-rfc3339-timestamp:{key}"));
         }
