@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Реальные PTY-проверки v0.1. Запуск: python3 tools/test_tui.py [binary]."""
 import errno
+import faulthandler
 import fcntl
 import json
 import os
@@ -18,6 +19,41 @@ import time
 import unicodedata
 
 BINARY = str(Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/zetto").resolve())
+
+
+def drain_pty(master, timeout=0):
+    os.set_blocking(master, False)
+    deadline = time.monotonic() + 2
+    while select.select([master], [], [], timeout)[0]:
+        assert time.monotonic() < deadline, "PTY drain timeout"
+        try:
+            chunk = os.read(master, 65536)
+        except BlockingIOError:
+            break
+        except OSError as error:
+            if error.errno == errno.EIO:
+                break
+            raise
+        # EOF может оставаться готовым для select, в том числе после выхода child.
+        if not chunk:
+            break
+        yield chunk
+
+
+def check_drain_eof():
+    reader, writer = os.pipe()
+    os.write(writer, b"payload")
+    os.close(writer)
+    try:
+        assert list(drain_pty(reader)) == [b"payload"]
+    finally:
+        os.close(reader)
+    master, slave = pty.openpty()
+    os.close(slave)
+    try:
+        assert list(drain_pty(master)) == []
+    finally:
+        os.close(master)
 
 
 def cli(vault, *args):
@@ -40,9 +76,7 @@ def check_cli_editor(root, env):
             # stdout — отдельный TTY; stderr — pipe, не тот же экран.
             process = subprocess.Popen([BINARY, "--vault", str(vault), "--format", output_format, "edit", note["id"]], stdin=slave, stdout=slave, stderr=subprocess.PIPE, env=env)
             _, stderr = process.communicate(timeout=7)
-            stdout = bytearray()
-            while select.select([master], [], [], 0)[0]:
-                stdout.extend(os.read(master, 65536))
+            stdout = b"".join(drain_pty(master))
             assert process.returncode == 0, (output_format, process.returncode, stdout, stderr)
             assert b"CLI_EDITOR_MARKER" not in stdout and b"\x1b" not in stdout, (output_format, stdout)
             assert b"\x1b[31mCLI_EDITOR_MARKER\x1b[0m" in stderr, stderr
@@ -84,16 +118,12 @@ class Pty:
         os.write(self.master, data.encode() if isinstance(data, str) else data)
 
     def drain(self, timeout):
-        if select.select([self.master], [], [], timeout)[0]:
-            try:
-                self.output.extend(os.read(self.master, 65536))
-                queries = self.output.count(b"\x1b[6n")
-                while self.cursor_queries < queries:
-                    os.write(self.master, b"\x1b[1;1R")
-                    self.cursor_queries += 1
-            except OSError as e:
-                if e.errno != errno.EIO:
-                    raise
+        for chunk in drain_pty(self.master, timeout):
+            self.output.extend(chunk)
+            queries = self.output.count(b"\x1b[6n")
+            while self.cursor_queries < queries:
+                os.write(self.master, b"\x1b[1;1R")
+                self.cursor_queries += 1
 
     def until(self, predicate, label):
         deadline = time.monotonic() + 7
@@ -154,6 +184,7 @@ class Pty:
 
 
 def main():
+    check_drain_eof()
     with tempfile.TemporaryDirectory(prefix="zetto-pty-") as temp:
         root = Path(temp)
         vault = root / "vault"
@@ -178,9 +209,10 @@ def main():
             note_id = drafts[0].name[:26]
             ui.resize(100, 28)
             ui.send("e")
-            ui.wait("EDITOR_OK")
+            ui.until(lambda: b"EDITOR_OK" in ui.output, "вывод внешнего редактора получен")
             ui.until(lambda: "EDITOR_BODY" in drafts[0].read_text(), "результат редактора сохранён ядром")
             assert "EDITOR_BODY" in cli(vault, "show", note_id)["body"]
+            ui.wait("PTY note")
             ui.send("l")
             ui.wait("Связь:")
             ui.send("\r")
@@ -193,8 +225,8 @@ def main():
             cli(vault, "capture", "external", "--title", "CLI concurrent")
             ui.send("r")
             ui.wait("Файлы сверены")
-            while select.select([ui.master], [], [], 0.05)[0]:
-                ui.drain(0)
+            ui.drain(0.05)
+            assert ui.process.poll() is None, "TUI завершился до проверки простоя"
             assert not select.select([ui.master], [], [], 0.2)[0], "idle TUI постоянно перерисовывается"
             ui.send("i")
             ui.wait("CLI concurrent")
@@ -303,4 +335,5 @@ def main():
 
 
 if __name__ == "__main__":
+    faulthandler.dump_traceback_later(60, repeat=True)
     main()
