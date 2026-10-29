@@ -641,6 +641,8 @@ impl Vault {
                     }
                     self.verified(&plan.backup, &plan.base_hash)?;
                     self.write_atomic(&plan.from, &bytes, true)?;
+                } else {
+                    sync_dir(self.path(&plan.from)?.parent().unwrap())?;
                 }
                 checkpoint("target_written")?;
             }
@@ -652,6 +654,7 @@ impl Vault {
                             "Цель публикации отличается от плана",
                         ));
                     }
+                    sync_dir(self.path(&plan.to)?.parent().unwrap())?;
                 } else {
                     self.verified(&plan.from, &plan.base_hash)?;
                     self.write_atomic(&plan.to, &bytes, false)?;
@@ -667,8 +670,8 @@ impl Vault {
                         ));
                     }
                     fs::remove_file(self.path(&plan.from)?)?;
-                    sync_dir(self.path(&plan.from)?.parent().unwrap())?;
                 }
+                sync_dir(self.path(&plan.from)?.parent().unwrap())?;
                 plan.state = PlanState::SourceRemoved;
                 self.save_plan(&plan)?;
                 checkpoint("source_removed")?;
@@ -695,14 +698,20 @@ impl Vault {
                             "Корневая заметка отличается от плана init",
                         ));
                     }
+                    sync_dir(self.path(&plan.to)?.parent().unwrap())?;
                 } else {
                     self.write_atomic(&plan.to, &bytes, false)?;
                 }
                 checkpoint("target_written")?;
                 if current_config.is_none() {
                     self.write_atomic(".zettorc", config.as_bytes(), false)?;
+                } else {
+                    sync_dir(self.root())?;
                 }
                 checkpoint("config_written")?;
+                for ancestor in self.root().ancestors().skip(1) {
+                    sync_dir(ancestor)?;
+                }
             }
         }
         plan.state = PlanState::Complete;
@@ -722,6 +731,7 @@ impl Vault {
         }
         if plan.state == PlanState::Preparing && self.read_optional(&plan.work)?.is_none() {
             self.verified(&plan.from, &plan.base_hash)?;
+            sync_dir(self.path(&plan.from)?.parent().unwrap())?;
             plan.state = PlanState::Abandoned;
             self.save_plan(&plan)?;
             return Ok(plan);
@@ -737,6 +747,7 @@ impl Vault {
                         "Изменённый исходник не будет затёрт",
                     ));
                 }
+                sync_dir(self.path(&plan.from)?.parent().unwrap())?;
             } else {
                 self.write_atomic(&plan.from, &backup, false)?;
             }
@@ -745,18 +756,21 @@ impl Vault {
                     return Err(Error::new("conflict", "Изменённая цель не будет удалена"));
                 }
                 fs::remove_file(self.path(&plan.to)?)?;
-                sync_dir(self.path(&plan.to)?.parent().unwrap())?;
             }
+            sync_dir(self.path(&plan.to)?.parent().unwrap())?;
         } else {
             let current = self.read(&plan.from)?;
             let current_hash = hash(&current);
             if current_hash == plan.new_hash {
                 self.write_atomic(&plan.from, &backup, true)?;
-            } else if current_hash != plan.base_hash && plan.kind != PlanKind::Edit {
-                return Err(Error::new(
-                    "conflict",
-                    "Изменённый оригинал не будет затёрт",
-                ));
+            } else {
+                if current_hash != plan.base_hash && plan.kind != PlanKind::Edit {
+                    return Err(Error::new(
+                        "conflict",
+                        "Изменённый оригинал не будет затёрт",
+                    ));
+                }
+                sync_dir(self.path(&plan.from)?.parent().unwrap())?;
             }
         }
         plan.state = PlanState::Abandoned;
@@ -847,6 +861,25 @@ impl Vault {
 }
 
 fn sync_dir(path: &Path) -> Result<()> {
+    #[cfg(test)]
+    {
+        SYNC_HITS.with(|hits| hits.borrow_mut().push(path.to_path_buf()));
+        let fail = SYNC_FAILURE.with(|failure| {
+            let mut failure = failure.borrow_mut();
+            if let Some((target, skip)) = failure.as_mut()
+                && target == path
+            {
+                if *skip == 0 {
+                    return true;
+                }
+                *skip -= 1;
+            }
+            false
+        });
+        if fail {
+            return Err(Error::new("io", "Отказ подтверждения каталога"));
+        }
+    }
     File::open(path)?.sync_all().map_err(Into::into)
 }
 
@@ -862,133 +895,11 @@ fn checkpoint(_step: &'static str) -> Result<()> {
 }
 
 #[cfg(test)]
-thread_local! { static FAIL_AFTER: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) }; }
+thread_local! {
+    static FAIL_AFTER: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+    static SYNC_FAILURE: std::cell::RefCell<Option<(PathBuf, usize)>> = const { std::cell::RefCell::new(None) };
+    static SYNC_HITS: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn dropped_guard_unlocks_even_with_transient_inherited_descriptor() {
-        let dir = tempfile::tempdir().unwrap();
-        let vault =
-            Vault::initialize(&dir.path().join("vault"), "root.md", b"root", "config").unwrap();
-        let guard = vault.lock().unwrap();
-        let _inherited = guard._file.try_clone().unwrap();
-        drop(guard);
-        assert!(vault.lock().is_ok());
-    }
-
-    #[test]
-    fn init_resumes_before_payload_preparation_finishes() {
-        for step in ["intent_saved", "backup_written", "work_written"] {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("vault");
-            FAIL_AFTER.with(|p| p.set(Some(step)));
-            let result = Vault::initialize(&path, "root.md", b"root", "config");
-            FAIL_AFTER.with(|p| p.set(None));
-            assert_eq!(result.unwrap_err().code, "interrupted");
-            let vault = Vault::initialize(&path, "other.md", b"other", "other").unwrap();
-            assert_eq!(vault.read("root.md").unwrap(), b"root");
-            assert_eq!(vault.read(".zettorc").unwrap(), b"config");
-        }
-    }
-    #[test]
-    fn interrupted_writes_resume_from_actual_files() {
-        for kind in [PlanKind::Replace, PlanKind::Publish, PlanKind::Init] {
-            let steps: &[&str] = match kind {
-                PlanKind::Publish => {
-                    &["plan_saved", "prepared", "target_written", "source_removed"]
-                }
-                PlanKind::Init => &["plan_saved", "prepared", "target_written", "config_written"],
-                _ => &["plan_saved", "prepared", "target_written"],
-            };
-            for &step in steps {
-                let dir = tempfile::tempdir().unwrap();
-                let root = dir.path().join("vault");
-                if kind == PlanKind::Init {
-                    FAIL_AFTER.with(|p| p.set(Some(step)));
-                    assert_eq!(
-                        Vault::initialize(&root, "root.md", b"root", "config")
-                            .unwrap_err()
-                            .code,
-                        "interrupted"
-                    );
-                    FAIL_AFTER.with(|p| p.set(None));
-                    let vault = Vault::initialize(&root, "other.md", b"other", "other").unwrap();
-                    assert_eq!(vault.read("root.md").unwrap(), b"root");
-                    assert_eq!(vault.read(".zettorc").unwrap(), b"config");
-                } else {
-                    let vault = Vault::initialize(&root, "root.md", b"root", "config").unwrap();
-                    let guard = vault.lock().unwrap();
-                    vault.create(&guard, "inbox/draft.md", b"old").unwrap();
-                    FAIL_AFTER.with(|p| p.set(Some(step)));
-                    let result = if kind == PlanKind::Publish {
-                        vault.publish(&guard, "inbox/draft.md", "published.md", &hash(b"old"))
-                    } else {
-                        vault.replace(&guard, "inbox/draft.md", &hash(b"old"), b"new")
-                    };
-                    assert_eq!(result.unwrap_err().code, "interrupted");
-                    FAIL_AFTER.with(|p| p.set(None));
-                    let plan = vault
-                        .plans()
-                        .unwrap()
-                        .into_iter()
-                        .find(|p| p.kind == kind)
-                        .unwrap();
-                    assert_eq!(vault.read(&plan.backup).unwrap(), b"old");
-                    vault
-                        .recover(&guard, &plan.operation_id, RecoveryMode::Resume)
-                        .unwrap();
-                    vault
-                        .recover(&guard, &plan.operation_id, RecoveryMode::Resume)
-                        .unwrap();
-                    let output = if kind == PlanKind::Publish {
-                        "published.md"
-                    } else {
-                        "inbox/draft.md"
-                    };
-                    assert_eq!(
-                        vault.read(output).unwrap(),
-                        if kind == PlanKind::Publish {
-                            b"old"
-                        } else {
-                            b"new"
-                        }
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn publication_does_not_delete_externally_changed_source() {
-        let dir = tempfile::tempdir().unwrap();
-        let vault =
-            Vault::initialize(&dir.path().join("vault"), "root.md", b"root", "config").unwrap();
-        let guard = vault.lock().unwrap();
-        vault.create(&guard, "inbox/draft.md", b"old").unwrap();
-        FAIL_AFTER.with(|p| p.set(Some("target_written")));
-        assert!(
-            vault
-                .publish(&guard, "inbox/draft.md", "published.md", &hash(b"old"))
-                .is_err()
-        );
-        FAIL_AFTER.with(|p| p.set(None));
-        fs::write(vault.path("inbox/draft.md").unwrap(), b"external").unwrap();
-        let plan = vault
-            .plans()
-            .unwrap()
-            .into_iter()
-            .find(|p| p.kind == PlanKind::Publish)
-            .unwrap();
-        assert_eq!(
-            vault
-                .recover(&guard, &plan.operation_id, RecoveryMode::Resume)
-                .unwrap_err()
-                .code,
-            "conflict"
-        );
-        assert_eq!(vault.read("inbox/draft.md").unwrap(), b"external");
-        assert_eq!(vault.read("published.md").unwrap(), b"old");
-    }
-}
+mod tests;
