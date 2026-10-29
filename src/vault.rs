@@ -631,8 +631,9 @@ impl Vault {
         match plan.kind {
             PlanKind::Replace | PlanKind::Edit => {
                 let current = self.read(&plan.from)?;
-                if hash(&current) != plan.new_hash {
-                    if hash(&current) != plan.base_hash {
+                let current_hash = hash(&current);
+                if current_hash != plan.new_hash {
+                    if current_hash != plan.base_hash {
                         return Err(Error::new(
                             "conflict",
                             "Оригинал изменился; обе версии сохранены",
@@ -748,9 +749,10 @@ impl Vault {
             }
         } else {
             let current = self.read(&plan.from)?;
-            if hash(&current) == plan.new_hash {
+            let current_hash = hash(&current);
+            if current_hash == plan.new_hash {
                 self.write_atomic(&plan.from, &backup, true)?;
-            } else if hash(&current) != plan.base_hash && plan.kind != PlanKind::Edit {
+            } else if current_hash != plan.base_hash && plan.kind != PlanKind::Edit {
                 return Err(Error::new(
                     "conflict",
                     "Изменённый оригинал не будет затёрт",
@@ -804,7 +806,6 @@ impl Vault {
             Some(config.into()),
         )?;
         vault.validate_plan(&plan, &plan.operation_id)?;
-        vault.save_plan(&plan)?;
         let recovery = plan.recovery_paths();
         vault.resume(plan).map_err(|e| e.with_recovery(recovery))?;
         drop(guard);

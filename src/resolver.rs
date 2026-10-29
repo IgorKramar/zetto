@@ -123,16 +123,12 @@ pub fn resolve(vault: &Vault, records: &[Record], source: &str, link: &Link) -> 
             ["file", "javascript", "data"].contains(&scheme.to_ascii_lowercase().as_str());
         if external || dangerous || !raw.chars().any(char::is_whitespace) {
             return outcome(
-                if link.kind == LinkKind::Wiki {
-                    if external {
-                        ResolutionKind::ExternalWiki
-                    } else {
-                        ResolutionKind::Unsafe
-                    }
-                } else if external {
-                    ResolutionKind::External
-                } else {
+                if !external {
                     ResolutionKind::Unsafe
+                } else if link.kind == LinkKind::Wiki {
+                    ResolutionKind::ExternalWiki
+                } else {
+                    ResolutionKind::External
                 },
                 link,
             );

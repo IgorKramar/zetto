@@ -498,7 +498,7 @@ impl App {
             return Ok(Outcome::note(original, false));
         }
         let raw = original.raw.as_ref().unwrap();
-        let mut note = format::parse(raw);
+        let mut note = original.note.clone();
         let newline = if note.body.contains("\r\n") {
             "\r\n"
         } else {

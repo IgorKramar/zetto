@@ -18,7 +18,6 @@ import time
 import unicodedata
 
 BINARY = str(Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/zetto").resolve())
-CSI = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def cli(vault, *args):
@@ -33,7 +32,6 @@ class Pty:
         self.resize(100, 28)
         self.before = termios.tcgetattr(self.slave)
         self.output = bytearray()
-        self.mark = 0
         self.cursor_queries = 0
         def attach():
             os.setsid()
@@ -47,7 +45,6 @@ class Pty:
             os.kill(self.process.pid, signal.SIGWINCH)
 
     def send(self, data):
-        self.mark = len(self.output)
         os.write(self.master, data.encode() if isinstance(data, str) else data)
 
     def drain(self, timeout):

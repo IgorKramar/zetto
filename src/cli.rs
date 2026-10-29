@@ -1,5 +1,6 @@
 use crate::app::{App, Outcome, StageFilter};
 use crate::error::{Error, Result};
+use crate::safe;
 use crate::vault::RecoveryMode;
 use crate::{config, editor, format, interrupt};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -531,17 +532,7 @@ fn write_jsonl(envelope: &Value) -> io::Result<()> {
     row("summary", &summary)?;
     out.flush()
 }
-fn safe(text: &str) -> String {
-    text.chars()
-        .map(|c| {
-            if c.is_control() && !matches!(c, '\n' | '\t') {
-                '�'
-            } else {
-                c
-            }
-        })
-        .collect()
-}
+
 fn human(envelope: &Value, color: bool) -> io::Result<()> {
     if !envelope["error"].is_null() {
         let mut stderr = io::stderr().lock();

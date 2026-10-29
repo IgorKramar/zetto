@@ -1,5 +1,6 @@
 use crate::app::{App, Catalog, Outcome, Record, Stage};
 use crate::error::{Error, Result};
+use crate::safe;
 use crate::{editor, interrupt};
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
@@ -222,17 +223,7 @@ fn error_text(e: &Error) -> String {
         }
     )
 }
-fn safe(text: &str) -> String {
-    text.chars()
-        .map(|c| {
-            if c.is_control() && !matches!(c, '\n' | '\t') {
-                '�'
-            } else {
-                c
-            }
-        })
-        .collect()
-}
+
 fn backspace(text: &mut String) {
     if let Some((offset, _)) = text.grapheme_indices(true).next_back() {
         text.truncate(offset);
@@ -584,63 +575,65 @@ fn draw(frame: &mut Frame, ui: &Ui, color: bool) {
     } else {
         None
     };
-    if let Some(rect) = list_area {
-        let items: Vec<_> = ui
-            .records()
-            .iter()
-            .map(|r| {
-                ListItem::new(safe(
-                    r.note
-                        .title()
-                        .filter(|t| !t.is_empty())
-                        .unwrap_or("Без заголовка"),
-                ))
-            })
-            .collect();
-        let mut state = ListState::default().with_selected(Some(ui.selected));
-        let highlight = if color {
-            Style::default().fg(Color::Rgb(216, 166, 87))
-        } else {
-            Style::default()
-        };
-        frame.render_stateful_widget(
-            List::new(items)
-                .block(panel("Заметки"))
-                .highlight_symbol("> ")
-                .highlight_style(highlight),
-            rect,
-            &mut state,
-        );
-    }
-    if let Some(rect) = preview_area {
-        let text = ui
-            .current()
-            .map(|r| {
-                format!(
-                    "{}\n{}\n{}{}\n{}",
-                    r.note.title().unwrap_or("Без заголовка"),
-                    r.note.id().unwrap_or("ID неверен"),
-                    r.path,
-                    if r.note
-                        .diagnostics
-                        .iter()
-                        .any(|d| d.rule_id == "zetto/root-exception")
-                    {
-                        "\nИсключение: корень"
-                    } else {
-                        ""
-                    },
-                    r.note.body
-                )
-            })
-            .unwrap_or_else(|| "Нет заметок · c — записать мысль".into());
-        frame.render_widget(
-            Paragraph::new(safe(&text))
-                .block(panel("Предпросмотр"))
-                .wrap(Wrap { trim: false })
-                .scroll((ui.scroll, 0)),
-            rect,
-        );
+    if ui.form.is_none() && ui.picker.is_none() {
+        if let Some(rect) = list_area {
+            let items: Vec<_> = ui
+                .records()
+                .iter()
+                .map(|r| {
+                    ListItem::new(safe(
+                        r.note
+                            .title()
+                            .filter(|t| !t.is_empty())
+                            .unwrap_or("Без заголовка"),
+                    ))
+                })
+                .collect();
+            let mut state = ListState::default().with_selected(Some(ui.selected));
+            let highlight = if color {
+                Style::default().fg(Color::Rgb(216, 166, 87))
+            } else {
+                Style::default()
+            };
+            frame.render_stateful_widget(
+                List::new(items)
+                    .block(panel("Заметки"))
+                    .highlight_symbol("> ")
+                    .highlight_style(highlight),
+                rect,
+                &mut state,
+            );
+        }
+        if let Some(rect) = preview_area {
+            let text = ui
+                .current()
+                .map(|r| {
+                    format!(
+                        "{}\n{}\n{}{}\n{}",
+                        r.note.title().unwrap_or("Без заголовка"),
+                        r.note.id().unwrap_or("ID неверен"),
+                        r.path,
+                        if r.note
+                            .diagnostics
+                            .iter()
+                            .any(|d| d.rule_id == "zetto/root-exception")
+                        {
+                            "\nИсключение: корень"
+                        } else {
+                            ""
+                        },
+                        r.note.body
+                    )
+                })
+                .unwrap_or_else(|| "Нет заметок · c — записать мысль".into());
+            frame.render_widget(
+                Paragraph::new(safe(&text))
+                    .block(panel("Предпросмотр"))
+                    .wrap(Wrap { trim: false })
+                    .scroll((ui.scroll, 0)),
+                rect,
+            );
+        }
     }
     let mut message = ui.message.clone();
     if let Some(record) = ui.current() {
