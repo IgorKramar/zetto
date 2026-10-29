@@ -40,6 +40,16 @@ def drain_pty(master, timeout=0):
         yield chunk
 
 
+def wait_pty_exit(process, drain):
+    # macOS может ждать чтения PTY даже в proc_exit; wait до drain блокирует обоих.
+    deadline = time.monotonic() + 7
+    while process.poll() is None:
+        if time.monotonic() >= deadline:
+            raise subprocess.TimeoutExpired(process.args, 7)
+        drain(0.05)
+    drain(0)
+
+
 def check_drain_eof():
     reader, writer = os.pipe()
     os.write(writer, b"payload")
@@ -54,6 +64,21 @@ def check_drain_eof():
         assert list(drain_pty(master)) == []
     finally:
         os.close(master)
+
+
+def check_pty_exit():
+    master, slave = pty.openpty()
+    process = subprocess.Popen([sys.executable, "-c", "import fcntl,os,sys,termios; os.setsid(); fcntl.ioctl(0, termios.TIOCSCTTY, 0); sys.stdout.buffer.write(b'x' * 131072); sys.stdout.flush()"], stdin=slave, stdout=slave, stderr=slave)
+    output = bytearray()
+    try:
+        wait_pty_exit(process, lambda timeout: output.extend(b"".join(drain_pty(master, timeout))))
+        assert process.returncode == 0 and output == b"x" * 131072, (process.returncode, len(output))
+    finally:
+        if process.poll() is None:
+            process.kill()
+        os.close(master)
+        os.close(slave)
+        process.wait(timeout=7)
 
 
 def cli(vault, *args):
@@ -167,8 +192,7 @@ class Pty:
         self.send(b"\x1b[200~" + text.encode() + b"\x1b[201~")
 
     def finish(self, code):
-        self.process.wait(timeout=7)
-        self.drain(0)
+        wait_pty_exit(self.process, self.drain)
         assert self.process.returncode == code, (code, self.process.returncode, self.output.decode(errors="replace"))
         assert termios.tcgetattr(self.slave) == self.before, "termios не восстановлен"
         assert b"\x1b[?2004l" in self.output and b"\x1b[?1049l" in self.output and b"\x1b[?25h" in self.output, "paste/alternate/cursor не восстановлены"
@@ -178,13 +202,16 @@ class Pty:
     def abort(self):
         if self.process.poll() is None:
             self.process.kill()
-            self.process.wait()
-        os.close(self.master)
-        os.close(self.slave)
+        try:
+            wait_pty_exit(self.process, self.drain)
+        finally:
+            os.close(self.master)
+            os.close(self.slave)
 
 
 def main():
     check_drain_eof()
+    check_pty_exit()
     with tempfile.TemporaryDirectory(prefix="zetto-pty-") as temp:
         root = Path(temp)
         vault = root / "vault"
