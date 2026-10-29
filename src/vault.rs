@@ -18,6 +18,13 @@ pub struct Guard {
     root: PathBuf,
 }
 
+impl Drop for Guard {
+    fn drop(&mut self) {
+        // fork другого потока может кратко удерживать унаследованный descriptor.
+        let _ = self._file.unlock();
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanKind {
@@ -30,10 +37,12 @@ pub enum PlanKind {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanState {
+    Preparing,
     Editing,
     Prepared,
     TargetWritten,
     SourceRemoved,
+    Restoring,
     Complete,
     Abandoned,
 }
@@ -52,6 +61,8 @@ pub struct Plan {
     pub work: String,
     pub state: PlanState,
     pub config: Option<String>,
+    #[serde(default)]
+    pub initial_note: Option<String>,
 }
 
 impl Plan {
@@ -130,7 +141,14 @@ impl Vault {
     }
 
     pub fn read(&self, relative: &str) -> Result<Vec<u8>> {
-        let file = File::open(self.path(relative)?)?;
+        let path = self.path(relative)?;
+        if !fs::symlink_metadata(&path)?.is_file() {
+            return Err(Error::new(
+                "validation_failed",
+                format!("Нужен обычный файл: {relative}"),
+            ));
+        }
+        let file = File::open(path)?;
         let mut bytes = Vec::new();
         file.take((MAX_NOTE_BYTES + 1) as u64)
             .read_to_end(&mut bytes)?;
@@ -290,8 +308,6 @@ impl Vault {
         self.ensure_dir(&directory)?;
         let backup = format!("{directory}/backup.md");
         let proposed = format!("{directory}/work.md");
-        self.write_atomic(&backup, base, false)?;
-        self.write_atomic(&proposed, work, false)?;
         let plan = Plan {
             version: 1,
             operation_id,
@@ -302,12 +318,50 @@ impl Vault {
             new_hash: hash(work),
             backup,
             work: proposed,
-            state: if kind == PlanKind::Edit {
-                PlanState::Editing
-            } else {
-                PlanState::Prepared
-            },
+            state: PlanState::Preparing,
             config,
+            initial_note: if kind == PlanKind::Init {
+                Some(
+                    std::str::from_utf8(work)
+                        .map_err(|_| Error::new("validation_failed", "Root должен быть UTF-8"))?
+                        .into(),
+                )
+            } else {
+                None
+            },
+        };
+        self.save_plan(&plan)?;
+        checkpoint("intent_saved")?;
+        self.prepare_files(plan, base, work)
+    }
+
+    fn prepare_files(&self, mut plan: Plan, base: &[u8], work: &[u8]) -> Result<Plan> {
+        if hash(base) != plan.base_hash || hash(work) != plan.new_hash {
+            return Err(Error::new(
+                "conflict",
+                "Подготовка не соответствует хешам плана",
+            ));
+        }
+        for (path, bytes, point) in [
+            (&plan.backup, base, "backup_written"),
+            (&plan.work, work, "work_written"),
+        ] {
+            match self.read_optional(path)? {
+                Some(existing) if hash(&existing) != hash(bytes) => {
+                    return Err(Error::new(
+                        "conflict",
+                        format!("Recovery-файл отличается: {path}"),
+                    ));
+                }
+                Some(_) => {}
+                None => self.write_atomic(path, bytes, false)?,
+            }
+            checkpoint(point)?;
+        }
+        plan.state = if plan.kind == PlanKind::Edit {
+            PlanState::Editing
+        } else {
+            PlanState::Prepared
         };
         self.save_plan(&plan)?;
         checkpoint("plan_saved")?;
@@ -526,11 +580,45 @@ impl Vault {
     }
 
     fn resume(&self, mut plan: Plan) -> Result<Plan> {
+        if plan.state == PlanState::Restoring {
+            return self.restore(plan);
+        }
         if plan.state == PlanState::Complete {
             return Ok(plan);
         }
         if plan.state == PlanState::Abandoned {
             return Err(Error::new("recovery_required", "Операция отменена"));
+        }
+        if plan.state == PlanState::Preparing {
+            let (base, work) = if plan.kind == PlanKind::Init {
+                (
+                    Vec::new(),
+                    plan.initial_note
+                        .as_ref()
+                        .ok_or_else(|| {
+                            Error::new("recovery_required", "Нет исходной root-заметки в плане")
+                        })?
+                        .as_bytes()
+                        .to_vec(),
+                )
+            } else {
+                let base = match self.read_optional(&plan.backup)? {
+                    Some(bytes) => bytes,
+                    None => self.verified(&plan.from, &plan.base_hash)?,
+                };
+                let work = match self.read_optional(&plan.work)? {
+                    Some(bytes) => bytes,
+                    None if plan.new_hash == plan.base_hash => base.clone(),
+                    None => {
+                        return Err(Error::new(
+                            "recovery_required",
+                            "Подготовка прервана до сохранения новой версии; restore оставит оригинал",
+                        ));
+                    }
+                };
+                (base, work)
+            };
+            plan = self.prepare_files(plan, &base, &work)?;
         }
         if plan.kind == PlanKind::Edit && plan.state == PlanState::Editing {
             let bytes = self.read(&plan.work)?;
@@ -619,13 +707,24 @@ impl Vault {
     }
 
     fn restore(&self, mut plan: Plan) -> Result<Plan> {
+        if plan.state == PlanState::Abandoned {
+            return Ok(plan);
+        }
         if plan.kind == PlanKind::Init {
             return Err(Error::new(
                 "recovery_required",
                 "Init можно продолжить; автоматического удаления vault нет",
             ));
         }
+        if plan.state == PlanState::Preparing && self.read_optional(&plan.work)?.is_none() {
+            self.verified(&plan.from, &plan.base_hash)?;
+            plan.state = PlanState::Abandoned;
+            self.save_plan(&plan)?;
+            return Ok(plan);
+        }
         let backup = self.verified(&plan.backup, &plan.base_hash)?;
+        plan.state = PlanState::Restoring;
+        self.save_plan(&plan)?;
         if plan.kind == PlanKind::Publish {
             if let Some(current) = self.read_optional(&plan.from)? {
                 if hash(&current) != plan.base_hash {
@@ -764,6 +863,31 @@ thread_local! { static FAIL_AFTER: std::cell::Cell<Option<&'static str>> = const
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dropped_guard_unlocks_even_with_transient_inherited_descriptor() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault =
+            Vault::initialize(&dir.path().join("vault"), "root.md", b"root", "config").unwrap();
+        let guard = vault.lock().unwrap();
+        let _inherited = guard._file.try_clone().unwrap();
+        drop(guard);
+        assert!(vault.lock().is_ok());
+    }
+
+    #[test]
+    fn init_resumes_before_payload_preparation_finishes() {
+        for step in ["intent_saved", "backup_written", "work_written"] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("vault");
+            FAIL_AFTER.with(|p| p.set(Some(step)));
+            let result = Vault::initialize(&path, "root.md", b"root", "config");
+            FAIL_AFTER.with(|p| p.set(None));
+            assert_eq!(result.unwrap_err().code, "interrupted");
+            let vault = Vault::initialize(&path, "other.md", b"other", "other").unwrap();
+            assert_eq!(vault.read("root.md").unwrap(), b"root");
+            assert_eq!(vault.read(".zettorc").unwrap(), b"config");
+        }
+    }
     #[test]
     fn interrupted_writes_resume_from_actual_files() {
         for kind in [PlanKind::Replace, PlanKind::Publish, PlanKind::Init] {

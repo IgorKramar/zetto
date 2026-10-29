@@ -113,6 +113,39 @@ fn recovery_plan_paths_are_untrusted() {
     assert!(!dir.path().join("outside.md").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn special_files_are_rejected_before_opening() {
+    let (_dir, vault, _name) = setup();
+    let _socket = std::os::unix::net::UnixListener::bind(vault.root().join("socket.md")).unwrap();
+    assert_eq!(
+        vault.read("socket.md").unwrap_err().code,
+        "validation_failed"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn interrupted_restore_is_pending_and_resume_finishes_undo() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_dir, vault, _name) = setup();
+    let guard = vault.lock().unwrap();
+    vault.create(&guard, "inbox/draft.md", b"text").unwrap();
+    let plan = vault
+        .publish(&guard, "inbox/draft.md", "published.md", &hash(b"text"))
+        .unwrap();
+    fs::set_permissions(vault.root(), fs::Permissions::from_mode(0o500)).unwrap();
+    let result = vault.recover(&guard, &plan.operation_id, RecoveryMode::Restore);
+    fs::set_permissions(vault.root(), fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.is_err());
+    assert!(vault.plan(&plan.operation_id).unwrap().unfinished());
+    vault
+        .recover(&guard, &plan.operation_id, RecoveryMode::Resume)
+        .unwrap();
+    assert_eq!(vault.read("inbox/draft.md").unwrap(), b"text");
+    assert!(!vault.path("published.md").unwrap().exists());
+}
+
 #[test]
 fn publish_is_recoverable_and_no_clobber() {
     let (_dir, vault, _name) = setup();
