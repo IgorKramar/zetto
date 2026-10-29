@@ -1,4 +1,6 @@
 use crate::error::{Error, Result};
+#[cfg(unix)]
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -63,7 +65,10 @@ pub fn run(args: &[String], work: &Path, cwd: &Path) -> Result<()> {
         .first()
         .filter(|p| !p.is_empty())
         .ok_or_else(|| Error::new("invalid_config", "Команда редактора пуста"))?;
-    let status = Command::new(program)
+    let mut command = Command::new(program);
+    #[cfg(unix)]
+    command.stdout(std::io::stderr().as_fd().try_clone_to_owned()?);
+    let status = command
         .args(&args[1..])
         .arg(work)
         .current_dir(cwd)

@@ -26,6 +26,42 @@ def cli(vault, *args):
     return json.loads(p.stdout)["data"]
 
 
+def check_cli_editor(root, env):
+    vault = root / "edit-vault"
+    cli(vault, "init")
+    note = cli(vault, "capture", "before", "--title", "CLI editor")
+    editor = root / "printing-editor.py"
+    editor.write_text("import pathlib,sys\np=pathlib.Path(sys.argv[1])\np.write_text(p.read_text() + '\\nCLI_EDITOR_BODY\\n')\nprint('\\x1b[31mCLI_EDITOR_MARKER\\x1b[0m', flush=True)\n")
+    env = dict(env, VISUAL=f"{sys.executable} {editor}", EDITOR=f"{sys.executable} {editor}")
+    for output_format in ("json", "jsonl"):
+        master, slave = pty.openpty()
+        process = None
+        try:
+            # stdout — отдельный TTY; stderr — pipe, не тот же экран.
+            process = subprocess.Popen([BINARY, "--vault", str(vault), "--format", output_format, "edit", note["id"]], stdin=slave, stdout=slave, stderr=subprocess.PIPE, env=env)
+            _, stderr = process.communicate(timeout=7)
+            stdout = bytearray()
+            while select.select([master], [], [], 0)[0]:
+                stdout.extend(os.read(master, 65536))
+            assert process.returncode == 0, (output_format, process.returncode, stdout, stderr)
+            assert b"CLI_EDITOR_MARKER" not in stdout and b"\x1b" not in stdout, (output_format, stdout)
+            assert b"\x1b[31mCLI_EDITOR_MARKER\x1b[0m" in stderr, stderr
+            if output_format == "json":
+                response = json.loads(stdout)
+            else:
+                records = [json.loads(line) for line in stdout.splitlines()]
+                assert records[-1]["type"] == "summary", records
+                response = records[-1]["data"]
+            assert response["status"] == "ok" and response["saved"] is True, response
+            assert "CLI_EDITOR_BODY" in cli(vault, "show", note["id"])["body"]
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate()
+            os.close(master)
+            os.close(slave)
+
+
 class Pty:
     def __init__(self, vault, env):
         self.master, self.slave = pty.openpty()
@@ -126,6 +162,7 @@ def main():
         editor.write_text("#!/usr/bin/env python3\nimport pathlib,sys\np=pathlib.Path(sys.argv[1])\np.write_text(p.read_text().replace('title: \"\"', 'title: \"PTY note\"') + '\\nEDITOR_BODY\\n')\nprint('EDITOR_OK', flush=True)\n")
         editor.chmod(0o700)
         env = dict(os.environ, EDITOR=str(editor), VISUAL=str(editor), XDG_CONFIG_HOME=str(root / "config"), TERM="xterm-256color", NO_COLOR="1")
+        check_cli_editor(root, env)
         ui = Pty(vault, env)
         try:
             ui.send("c")
@@ -262,7 +299,7 @@ def main():
             p = subprocess.run([BINARY, "--vault", str(vault), *args], input=b"", capture_output=True)
             assert p.returncode == 2 and b"interaction_required" in p.stdout + p.stderr
             assert b"\x1b[?1049h" not in p.stdout
-    print("PTY: capture → editor → link → publish; new/rejected publish; concurrent CLI/refresh; Unicode/resize; idle; IO retry; editor failure; q/Ctrl-C/SIGINT; termios — OK")
+    print("PTY: CLI edit JSON/JSONL; capture → editor → link → publish; new/rejected publish; concurrent CLI/refresh; Unicode/resize; idle; IO retry; editor failure; q/Ctrl-C/SIGINT; termios — OK")
 
 
 if __name__ == "__main__":
