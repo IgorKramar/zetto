@@ -1,0 +1,83 @@
+{
+  "generator_version": 1,
+  "profile": "invalid",
+  "notes": 9,
+  "resolved_edges": 0,
+  "files": [
+    {
+      "path": "01ARYZ6S410000000000000000-koren.md",
+      "sha256": "18a20da1028963f26c515ee1643d5cca60409190749ba844d7f037d074279609",
+      "edges": [],
+      "diagnostics": [
+        "zetto/missing-required-field"
+      ]
+    },
+    {
+      "path": "01ARYZ6S410000000000000001-zametka-1.md",
+      "sha256": "e0c62bfb55ea4c9f30dc433e65ad6d4f9154dc72a53c52bbec494c88386f9be8",
+      "edges": [],
+      "diagnostics": [
+        "zetto/missing-required-field"
+      ]
+    },
+    {
+      "path": "01ARYZ6S410000000000000002-zametka-2.md",
+      "sha256": "b2ef6480ff579c3f25b0a07e11f394cc4b8e5e04aa8f99bd113a08cc4239463d",
+      "edges": [],
+      "diagnostics": [
+        "zetto/invalid-yaml"
+      ]
+    },
+    {
+      "path": "01ARYZ6S410000000000000003-zametka-3.md",
+      "sha256": "366e165bc3dcd56382368a808e4c5880001557d6d929b91fb117efc6d51b017f",
+      "edges": [],
+      "diagnostics": [
+        "zetto/duplicate-frontmatter-key"
+      ]
+    },
+    {
+      "path": "01ARYZ6S410000000000000004-zametka-4.md",
+      "sha256": "1f494a1931112c4bf7647144e6c271de7fd5813d5e9fb7acc3f56bdd855a04b6",
+      "edges": [],
+      "diagnostics": [
+        "zetto/duplicate-id"
+      ]
+    },
+    {
+      "path": "01ARYZ6S410000000000000005-zametka-5.md",
+      "sha256": "89f99986a194c492d67f7892569f9a42a54d23f2ddd5ce42b49b2c94b95eaac0",
+      "edges": [],
+      "diagnostics": [
+        "zetto/duplicate-id",
+        "zetto/id-filename-mismatch"
+      ]
+    },
+    {
+      "path": "01ARYZ6S410000000000000006-zametka-6.md",
+      "sha256": "752642c0c306c8ceff166a14af37df498bfc156ebfd389b31c4dfbdd3be08465",
+      "edges": [],
+      "diagnostics": [
+        "zetto/invalid-tags-format",
+        "zetto/non-rfc3339-timestamp"
+      ]
+    },
+    {
+      "path": "01ARYZ6S410000000000000007-zametka-7.md",
+      "sha256": "84fb04a8d2b1eb2a3509c80d1c824b81a5f22515e0e6d07256fb782130483b67",
+      "edges": [],
+      "diagnostics": [
+        "zetto/invalid-id-format",
+        "zetto/id-filename-mismatch"
+      ]
+    },
+    {
+      "path": "01ARYZ6S410000000000000008-zametka-8.md",
+      "sha256": "a96d01a881db3e4a553be6a92fe4abf6c45e77ee8d93fd5e352a3ac022dcda9d",
+      "edges": [],
+      "diagnostics": [
+        "zetto/merge-conflict"
+      ]
+    }
+  ]
+}

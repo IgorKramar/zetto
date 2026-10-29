@@ -1,0 +1,223 @@
+{
+  "vault": "small",
+  "cases": [
+    {
+      "name": "canonical-id",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S410000000000000000",
+      "outcome": "resolved",
+      "target_id": "01ARYZ6S410000000000000000"
+    },
+    {
+      "name": "display-does-not-change-target",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S410000000000000000|Текст|ещё",
+      "outcome": "resolved",
+      "target_id": "01ARYZ6S410000000000000000"
+    },
+    {
+      "name": "lowercase-ulid",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01aryz6s410000000000000000",
+      "outcome": "invalid"
+    },
+    {
+      "name": "overflow-ulid",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "ZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+      "outcome": "invalid"
+    },
+    {
+      "name": "missing-id",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S4100000000000009RF",
+      "outcome": "broken"
+    },
+    {
+      "name": "ambiguous-alias",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "  ОБЩЕЕ  ",
+      "outcome": "ambiguous",
+      "candidates": [
+        "01ARYZ6S410000000000000001",
+        "01ARYZ6S410000000000000002"
+      ]
+    },
+    {
+      "name": "no-title-fallback",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "Заметка 3",
+      "outcome": "broken"
+    },
+    {
+      "name": "filename",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S410000000000000001-zametka-1.md",
+      "outcome": "resolved",
+      "target_id": "01ARYZ6S410000000000000001"
+    },
+    {
+      "name": "filename-without-extension",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S410000000000000001-zametka-1",
+      "outcome": "resolved",
+      "target_id": "01ARYZ6S410000000000000001"
+    },
+    {
+      "name": "missing-alias",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "Нет такой заметки",
+      "outcome": "broken"
+    },
+    {
+      "name": "empty",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "",
+      "outcome": "broken"
+    },
+    {
+      "name": "external-wiki",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "https://example.org",
+      "outcome": "external-as-wiki"
+    },
+    {
+      "name": "anchor",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S410000000000000000#Заголовок",
+      "outcome": "unsupported"
+    },
+    {
+      "name": "block-ref",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S410000000000000000#^abc123",
+      "outcome": "unsupported"
+    },
+    {
+      "name": "embed",
+      "kind": "embed",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S410000000000000000",
+      "outcome": "unsupported"
+    },
+    {
+      "name": "markdown-current-name",
+      "kind": "markdown",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "./01ARYZ6S410000000000000001-zametka-1.md",
+      "outcome": "resolved",
+      "target_id": "01ARYZ6S410000000000000001"
+    },
+    {
+      "name": "markdown-stale-slug",
+      "kind": "markdown",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S410000000000000001-old.md",
+      "outcome": "resolved",
+      "target_id": "01ARYZ6S410000000000000001",
+      "diagnostic": "zetto/stale-link-path"
+    },
+    {
+      "name": "markdown-alias-is-not-a-path",
+      "kind": "markdown",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "Общее.md",
+      "outcome": "broken"
+    },
+    {
+      "name": "markdown-external",
+      "kind": "markdown",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "https://example.org",
+      "outcome": "external"
+    },
+    {
+      "name": "unsafe-scheme",
+      "kind": "markdown",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "javascript:alert(1)",
+      "outcome": "unsafe"
+    },
+    {
+      "name": "escape-root",
+      "kind": "markdown",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "../outside.md",
+      "outcome": "unsafe"
+    },
+    {
+      "name": "encoded-escape",
+      "kind": "markdown",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "%2e%2e/outside.md",
+      "outcome": "unsafe"
+    },
+    {
+      "name": "absolute-path",
+      "kind": "markdown",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "/tmp/note.md",
+      "outcome": "unsafe"
+    },
+    {
+      "name": "fragment-is-not-whole-note",
+      "kind": "markdown",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S410000000000000000-koren.md#heading",
+      "outcome": "unsupported"
+    },
+    {
+      "name": "self-link",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S410000000000000003",
+      "outcome": "resolved",
+      "target_id": "01ARYZ6S410000000000000003",
+      "satisfies_publish": false
+    },
+    {
+      "name": "draft-target",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S410000000000000007",
+      "outcome": "resolved",
+      "target_id": "01ARYZ6S410000000000000007",
+      "satisfies_publish": false
+    },
+    {
+      "name": "published-target",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S410000000000000001",
+      "outcome": "resolved",
+      "target_id": "01ARYZ6S410000000000000001",
+      "satisfies_publish": true
+    },
+    {
+      "name": "duplicate-id",
+      "kind": "wiki",
+      "source": "01ARYZ6S410000000000000003-zametka-3.md",
+      "raw": "01ARYZ6S410000000000000004",
+      "outcome": "ambiguous",
+      "vault": "invalid",
+      "candidates": [
+        "01ARYZ6S410000000000000004-zametka-4.md",
+        "01ARYZ6S410000000000000005-zametka-5.md"
+      ]
+    }
+  ]
+}

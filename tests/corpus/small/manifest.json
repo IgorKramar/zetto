@@ -1,0 +1,73 @@
+{
+  "generator_version": 1,
+  "profile": "small",
+  "notes": 8,
+  "resolved_edges": 5,
+  "files": [
+    {
+      "path": "01ARYZ6S410000000000000000-koren.md",
+      "sha256": "d96d3f0d13f6b8cec00cb918209adc2982f64b645c09d826ac3b25abd668634b",
+      "edges": [],
+      "diagnostics": []
+    },
+    {
+      "path": "01ARYZ6S410000000000000001-zametka-1.md",
+      "sha256": "156e8e41e73b263099120b92afcec5a1a9b2aaf4b47538aa407de4e0d38e6a89",
+      "edges": [
+        "01ARYZ6S410000000000000000"
+      ],
+      "diagnostics": []
+    },
+    {
+      "path": "01ARYZ6S410000000000000002-zametka-2.md",
+      "sha256": "ce4e5c6fffc6d3433b5e1f4352d1284d391340ffc695bf304ae1b86b47c688b2",
+      "edges": [
+        "01ARYZ6S410000000000000001"
+      ],
+      "diagnostics": []
+    },
+    {
+      "path": "01ARYZ6S410000000000000003-zametka-3.md",
+      "sha256": "643bb750bf0c70ba2c435a86fd9a1294b5e00612b900833593173eb22bcae3fb",
+      "edges": [
+        "01ARYZ6S410000000000000002"
+      ],
+      "diagnostics": []
+    },
+    {
+      "path": "01ARYZ6S410000000000000004-zametka-4.md",
+      "sha256": "3b8b3047f4f49d89ae744f33cd3114cf08dc0563706650c4a30c99d6a025a96f",
+      "edges": [],
+      "diagnostics": [
+        "zetto/link-before-publish"
+      ]
+    },
+    {
+      "path": "01ARYZ6S410000000000000005-zametka-5.md",
+      "sha256": "14d85f65b827ff3a4324f57bf891dfe1961843b0c3807d7ac673d5707b23f1d3",
+      "edges": [
+        "01ARYZ6S410000000000000004"
+      ],
+      "diagnostics": [
+        "zetto/ambiguous-link",
+        "zetto/no-broken-link"
+      ]
+    },
+    {
+      "path": "inbox/01ARYZ6S410000000000000006.md",
+      "sha256": "56831a1d3c3f71cd72b6b70ec1204a7970a8fb50af81cac4f27bef5cb01cc540",
+      "edges": [],
+      "diagnostics": [
+        "zetto/empty-title"
+      ]
+    },
+    {
+      "path": "inbox/01ARYZ6S410000000000000007-zametka-7.md",
+      "sha256": "084e95ca94efc2f706b407ed13e315122d861e9664980049f3f2ad43e308c82f",
+      "edges": [
+        "01ARYZ6S410000000000000006"
+      ],
+      "diagnostics": []
+    }
+  ]
+}

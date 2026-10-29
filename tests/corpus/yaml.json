@@ -1,0 +1,71 @@
+[
+  {
+    "name": "minimal-unicode",
+    "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: 'Мысль: #1'\n",
+    "expected": {"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "title": "Мысль: #1"}
+  },
+  {
+    "name": "nested-unknown-values",
+    "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Test\n# comment may disappear\nx-extra: {list: [null, true, false, 42, 1.5, '01', 'no'], nested: {key: value}}\nmood: calm\n",
+    "expected": {"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "title": "Test", "x-extra": {"list": [null, true, false, 42, 1.5, "01", "no"], "nested": {"key": "value"}}, "mood": "calm"}
+  },
+  {
+    "name": "anchors-and-merge",
+    "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Test\nx-base: &base {a: 1}\nx-copy: *base\nx-merged: {<<: *base, b: 2}\n",
+    "expected": {"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "title": "Test", "x-base": {"a": 1}, "x-copy": {"a": 1}, "x-merged": {"a": 1, "b": 2}}
+  },
+  {
+    "name": "multiline-crlf",
+    "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\r\ntitle: Test\r\nx-literal: |\r\n  line one\r\n  line two\r\nx-folded: >-\r\n  one\r\n  two\r\n",
+    "expected": {"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "title": "Test", "x-literal": "line one\nline two\n", "x-folded": "one two"}
+  },
+  {
+    "name": "yaml12-booleans",
+    "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Test\nx-values: [no, yes, on, off, true, false]\n",
+    "expected": {"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "title": "Test", "x-values": ["no", "yes", "on", "off", true, false]}
+  },
+  {
+    "name": "optional-errors-keep-required-and-unknown",
+    "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Good\ntags: [rust, 12]\naliases: {wrong: shape}\ncreated: yesterday\nupdated: false\nx-keep: {a: [1, 2]}\n",
+    "expected": {"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "title": "Good", "tags": ["rust", 12], "aliases": {"wrong": "shape"}, "created": "yesterday", "updated": false, "x-keep": {"a": [1, 2]}},
+    "diagnostics": ["zetto/invalid-tags-format", "zetto/invalid-aliases-format", "zetto/non-rfc3339-timestamp:created", "zetto/non-rfc3339-timestamp:updated"]
+  },
+  {"name": "tags-scalar", "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Test\ntags: rust\n", "diagnostics": ["zetto/non-canonical-tag-format"]},
+  {"name": "timestamps", "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Test\ncreated: 2026-10-29T12:00:00Z\nupdated: '2026-10-29T18:00:00+06:00'\n"},
+  {"name": "empty-inbox-title", "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: ''\n", "diagnostics": ["zetto/empty-title"]},
+  {"name": "missing-id", "yaml": "title: Test\n", "diagnostics": ["zetto/missing-required-field:id"]},
+  {"name": "missing-title", "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\n", "diagnostics": ["zetto/missing-required-field:title"]},
+  {"name": "wrong-required-types", "yaml": "id: 123\ntitle: false\n", "diagnostics": ["zetto/invalid-required-type:id", "zetto/invalid-required-type:title"]},
+  {"name": "ulid-overflow", "yaml": "id: ZZZZZZZZZZZZZZZZZZZZZZZZZZ\ntitle: Test\n", "diagnostics": ["zetto/invalid-id-format"]},
+  {"name": "ulid-lowercase", "yaml": "id: 01arz3ndektsv4rrffq69g5fav\ntitle: Test\n", "diagnostics": ["zetto/invalid-id-format"]},
+  {"name": "ulid-forbidden-letter", "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAI\ntitle: Test\n", "diagnostics": ["zetto/invalid-id-format"]},
+  {"name": "top-level-list", "yaml": "[one, two]", "expected": ["one", "two"], "diagnostics": ["zetto/frontmatter-not-mapping"]},
+  {"name": "duplicate-key", "yaml": "title: A\ntitle: B\n", "rejected": true},
+  {"name": "nested-duplicate", "yaml": "x-a: {b: 1, b: 2}", "rejected": true},
+  {"name": "syntax", "yaml": "title: [unclosed", "rejected": true},
+  {"name": "multi-document", "yaml": "title: A\n---\ntitle: B\n", "rejected": true},
+  {"name": "unknown-tag", "yaml": "title: !custom something", "rejected": true},
+  {"name": "include-disabled", "yaml": "title: !include /etc/passwd", "rejected": true},
+  {"name": "nonfinite", "yaml": "x-a: .nan", "rejected": true},
+  {"name": "complex-key", "yaml": "? [one, two]\n: value", "rejected": true},
+  {"name": "recursive-alias", "yaml": "x-a: &a [*a]", "rejected": true},
+  {"name": "numeric-string-key-collision", "yaml": "x-extra: {1: one, '1': two}", "rejected": true},
+  {"name": "hex-string-key-collision", "yaml": "x-extra: {0xB: one, '0xB': two}", "rejected": true},
+  {"name": "boolean-key-collision", "yaml": "x-extra: {true: one, 'true': two}", "rejected": true},
+  {"name": "null-key-collision", "yaml": "x-extra: {null: one, 'null': two}", "rejected": true},
+  {
+    "name": "valid-optional-lists",
+    "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Test\ntags: [rust, знание]\naliases: ['Общее', 'Другая мысль']\n",
+    "expected": {"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "title": "Test", "tags": ["rust", "знание"], "aliases": ["Общее", "Другая мысль"]}
+  },
+  {
+    "name": "empty-optional-lists",
+    "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Test\ntags: []\naliases: []\n",
+    "expected": {"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "title": "Test", "tags": [], "aliases": []}
+  },
+  {
+    "name": "quoted-numeric-keys",
+    "yaml": "id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Test\nx-extra: {'1': one, '0xB': two}\n",
+    "expected": {"id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "title": "Test", "x-extra": {"1": "one", "0xB": "two"}}
+  }
+]

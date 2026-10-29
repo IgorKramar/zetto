@@ -1,5 +1,12 @@
 # ADR-0003: Link representation
 
+> Принятое уточнение от 2026-10-29:
+> [ADR-0005](0005-format-layout-and-resolution.md) заменяет раздел
+> «Resolver — ordered passes» и связанные edge cases: единый resolver,
+> полная проверка ULID, явная неоднозначность, suffix/embeds без fallback
+> на целую заметку. Нормативный контракт — [format-v1](../../format-v1.md).
+> Синтаксис создаваемых ссылок сохраняется; исторический текст ниже оставлен.
+
 - **Date**: 2026-05-09
 - **Status**: Accepted
 - **Authors**: Igor Kramar

@@ -8,6 +8,14 @@
 - **Decided**: A1 — индекс открытых архитектурных решений в [`decision-map.md`](../decision-map.md)
 - **Affects (разблокирует или ограничивает)**: A2, A3, A4, A5, B1, B2, C4, C5, D1, D4, D5
 
+> Принятые уточнения от 2026-10-29:
+> [ADR-0005](0005-format-layout-and-resolution.md) заменяет положения разделов
+> «Линкование», «Empty-slug lifecycle» и «Invariant validation» об источнике
+> идентичности resolver и записи при чтении; YAML-зависимость/writer — также
+> по ADR-0005. [ADR-0006](0006-safe-writes-and-recovery.md) заменяет протокол
+> retitle/recovery. Остальная ID/filename-схема остаётся в силе;
+> исторический текст ниже сохранён для прослеживаемости.
+
 ## Context
 
 После того как 2026-05-09 написаны `STRATEGY.md`, `ARCHITECTURE.md` и `decision-map.md`, A1 (Note ID scheme + filename convention) выделен в decision-map как решение с наибольшим радиусом влияния — блокирует A2 (link representation), A3 (frontmatter convention), A4 (notes directory layout), A5 (format versioning), B1 (graph index strategy), B2 (markdown parser), C4 (capture flow architecture), D1 (search backend) и D4 (Obsidian-vault compatibility posture). Каждая заметка в zetto должна иметь стабильный идентификатор, переживающий retitle, не сталкивающийся с другими, читаемый в `ls`/`fzf`/`grep`, и совместимый с фиксированной публичной спецификацией формата.

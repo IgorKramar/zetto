@@ -1,9 +1,13 @@
 # Decision Map
 
-> Living document. Updated whenever a cycle completes or a new architectural question is identified.
-> Last updated: 2026-05-09 (после `/archforge:observe` — см. [docs/architecture/research/2026-05-09-observe.md](research/2026-05-09-observe.md))
+> 2026-10-29: владелец принял ADR-0005–0008 и
+> [пакет этапа 0](../contracts/stage-0.md). Закрыты A4/A5/C1/C2b/C4;
+> A1–A3 уточнены новыми ADR. Реализация начинается с v0.1.
 
-Источники: 5 open questions из [`ARCHITECTURE.md`](../../ARCHITECTURE.md) + неявные архитектурные решения, подразумеваемые [`STRATEGY.md`](../../STRATEGY.md) и треками работы (Note graph engine / TUI & capture flow / Toolchain interop / Methodology enforcement) + находки `/ce-ideate` от 2026-05-09 (см. [`docs/ideation/2026-05-09-zk-surprise-me-ideation.md`](../ideation/2026-05-09-zk-surprise-me-ideation.md)). ADR-ов пока нет.
+> Living document. Updated whenever a cycle completes or a new architectural question is identified.
+> Last updated: 2026-10-29 (принятие контрактов этапа 0)
+
+Источники: 5 open questions из [`ARCHITECTURE.md`](../../ARCHITECTURE.md) + неявные архитектурные решения, подразумеваемые [`STRATEGY.md`](../../STRATEGY.md) и треками работы (Note graph engine / TUI & capture flow / Toolchain interop / Methodology enforcement) + находки `/ce-ideate` от 2026-05-09 (см. [`docs/ideation/2026-05-09-zk-surprise-me-ideation.md`](../ideation/2026-05-09-zk-surprise-me-ideation.md)). Приняты ADR-0001–0008; исторические исследования сохраняются.
 
 ---
 
@@ -32,13 +36,13 @@
 
 **A4. Notes directory layout**
 - *Forces*: single flat root vs id-prefix-buckets (`a/`, `b/`...) vs freeform (пользователь сам решает). STRATEGY запрещает «папки-как-таксономия» — но папки как операционный shard остаются на столе. Влияет на скорость FS-обхода и читаемость в `ls`.
-- *Status*: open (имплицитно)
+- *Status*: **decided** — [ADR-0005](decisions/0005-format-layout-and-resolution.md): плоский корень, inbox/assets/recovery с разным жизненным циклом.
 - *Blocks*: A5, B1 (стратегия индексации), B3 (FS-watcher scope), D4
 - *Blocked by*: A1 (если ID hierarchical — раскладка следует из ID)
 
 **A5. Format versioning policy & public spec contract** *(добавлено `/archforge:observe` 2026-05-09; находка O-2)*
 - *Forces*: что входит в публичную спецификацию формата (frontmatter-схема, ID-формат, link-syntax, layout-правила); как обозначаются мажорные/минорные изменения; кто и когда принимает PR, ломающий формат; какие миграционные инструменты обязательны при bump-е версии. Без этой политики «заморозка A1» — пустое обещание.
-- *Status*: open
+- *Status*: **decided** — [ADR-0005](decisions/0005-format-layout-and-resolution.md), [format-v1](../format-v1.md) и [контракт этапа 0](../contracts/stage-0.md): независимые версии формата/config/JSON/index, явная миграция несовместимых изменений; лицензия отдельной публикации спецификации фиксируется до beta.
 - *Blocks*: D4 (Obsidian-compat зависит от того, чем именно совместимы); миграционная политика всех будущих изменений
 - *Blocked by*: A1, A2, A3, A4 (нечего фиксировать в спецификации, пока эти не разрешены)
 
@@ -74,7 +78,7 @@
 
 **C1. TUI ↔ CLI-pipe boundary** (= Q4)
 - *Forces*: какие операции pipe-friendly (`zetto new`, `zetto list`, `zetto lint`) vs только TUI (живая навигация графа, fuzzy-link picker). Контракт Toolchain interop track. Решение «всё через TUI» убивает scriptability; «всё через CLI» убивает UX.
-- *Status*: open
+- *Status*: **decided** — [ADR-0007](decisions/0007-shared-cli-tui-core.md): общее ядро CLI/TUI и JSON с первой команды.
 - *Blocks*: C2a, C2b, C3, C4, C5, D1
 - *Blocked by*: — (можно решать почти параллельно с A)
 
@@ -84,9 +88,9 @@
 - *Blocks*: C2b, C4
 - *Blocked by*: C1
 
-**C2b. Default strictness for `link-before-save` rule** *(прежняя C2, теперь как одно правило внутри C2a)*
-- *Forces*: уровень правила `zetto/link-before-save` в дефолтном пресете — `error` (блокирует save), `warn` (предупреждает, но позволяет), или `off` (только в `zetto lint` batch). Прямой trade-off Capture latency ↔ Orphan-note ratio.
-- *Status*: open
+**C2b. Default strictness for `link-before-publish` rule** *(уточнено ADR-0008)*
+- *Forces*: сохранить мысль до методологической проверки, сохранив требование связности опубликованной базы. Capture не блокируется отсутствием связи; публикация требует связь на другую опубликованную заметку.
+- *Status*: **decided** — [ADR-0008](decisions/0008-capture-publish-and-root.md): `link-before-publish` блокирует публикацию, capture сохраняет без связи; root — явное исключение.
 - *Blocks*: C4
 - *Blocked by*: C1, C2a (уровень имеет смысл только в рамках общей модели уровней)
 
@@ -99,7 +103,7 @@
 
 **C4. Capture flow architecture** *(reframed `/archforge:observe` 2026-05-09; находка O-7 — расширено с UX-дизайна до архитектуры потоков)*
 - *Forces*: верхнеуровневый выбор — (a) **single mode**: один поток, в нём же применяются ограничения; (b) **service / prep split** (mise-en-place): `zetto capture` — service-mode <5 с, без валидации, append в inbox-buffer; `zetto prep` — отдельный методичный ритуал, где применяются `zetto/link-before-save` и пр. Трактует напряжение метрик capture-latency ↔ orphan-ratio как архитектурное, а не правило-уровневое. Подвопросы (single-keystroke shape, fuzzy-linking UX, бюджет latency) — внутри выбранного верхнеуровневого варианта.
-- *Status*: open
+- *Status*: **decided** — [ADR-0008](decisions/0008-capture-publish-and-root.md): capture → обработка → publish; new объединяет шаги с сохранением draft при неудаче.
 - *Blocks*: —
 - *Blocked by*: A1, A2, B1, C1, C2a, C2b, C3 (это конечная UX-сборка верхнего уровня)
 
@@ -148,42 +152,26 @@
 
 ## Suggested order
 
-Топологическая сортировка с учётом hard-dependencies. Сортировка внутри уровня — по reversibility (необратимое первым), blast radius (большее первым), information value (отвечает на больше других вопросов первым).
+1. **v0.1:** реализовать принятый формат и безопасный файловый слой,
+   общее ядро, CLI/JSON и минимальный TUI. B2/C3 — конкретные зависимости
+   и их совместимость фиксируются с потребляющим кодом; полный обход в памяти.
+2. **v0.2:** B1/B3/D1 — производный SQLite-индекс, схема/сверка/свежесть,
+   watcher и поиск. Обязательное сравнение full/incremental графа.
+3. **v0.3–0.4:** ежедневный TUI и C2a — общий движок диагностик/пресетов.
+   Базовые защиты и условие publish действуют уже с v0.1.
+4. **v0.5:** C5/D4 — инструменты редактора/импорта/экспорта и recovery;
+   произвольная двусторонняя совместимость Obsidian вне 1.0.
+5. **До beta/RC:** D2/D5 — документация git-workflow и поставка проверенных
+   пакетов. Публикация релиза требует отдельного явного действия владельца.
 
-**Уровень 0 (next up — unblocked)**
-- **A3. Frontmatter convention** — full schema полей; обязательность `title:` (подразумевается ADR-0003 для render-fallback) формализуется здесь; `aliases:` поле под D4=read-write — открытое решение внутри.
-- **A4. Notes directory layout** — single root vs id-prefix-buckets vs freeform.
-- **A5. Format versioning policy & public spec contract** — замыкающий ADR группы A.
-- **C1. TUI ↔ CLI-pipe boundary** — параллельно: не блокируется ничем из Group A.
-
-*(A1 — ID-scheme — закрыт [ADR-0002](decisions/0002-note-id-scheme-and-filename-layout.md). A2 — link representation — закрыт [ADR-0003](decisions/0003-link-representation.md). D3 — имя проекта — закрыт [ADR-0001](decisions/0001-project-name-and-ecosystem-positioning.md).)*
-
-**Уровень 1 (после A2/A3/A4 закрыты)**
-
-**Уровень 2 (после Group A закрыт)**
-- **A5. Format versioning policy** — разрешать как замыкающий ADR группы A, фиксирующий контракт.
-- **B1. Graph index strategy** — наиболее information-rich: разблокирует B3, D1, C4-латентность.
-- **B2. Markdown parser** — почти автоматически следует из A2.
-- **C2a. Methodology rule engine architecture** — после C1; рамка для всей Methodology enforcement track.
-- **D4. Obsidian-vault compatibility posture** — после Group A.
-
-**Уровень 3 (после B1 / C2a)**
-- **B3. FS-watcher strategy** (только если B1 = persistent или event-sourced).
-- **D1. Search backend.**
-- **C2b. Default strictness for `link-before-save`** (после C2a).
-- **C3. TUI library choice** (после C1).
-- **C5. Editor-integration strategy** (после C1; рекомендуется `/archforge:research` перед циклом).
-
-**Уровень 4 (последним)**
-- **C4. Capture flow architecture** — финальная UX-сборка, должна знать всё предыдущее.
-- **D2. Git coupling model** — лоу-приоритет, можно отложить до первой реальной потребности.
-- **D5. Distribution & packaging** — отложено до v0.1 release plan.
+A1–A5, C1, C2b и C4 больше не являются очередью открытого проектирования.
+Принятое поведение и критерии версий — в [пакете этапа 0](../contracts/stage-0.md).
 
 ---
 
 ## Cross-cutting (через несколько групп)
 
-- **Latency budget allocation** (находка O-8 от `/archforge:observe`) — STRATEGY-метрика capture-latency <5 с распределяется по этапам в [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §2 Quality attributes (см. амендмент от 2026-05-09). Любое решение в A/B/C должно явно указать свой бюджет внутри общего <5 с.
+- **Latency budget allocation** — машинное время capture/publish измеряется отдельно от времени пользователя по ADR-0008. Системные бюджеты и отсутствие измерений приложения указаны в [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §2; обход/stat учитывается отдельно.
 
 ---
 
