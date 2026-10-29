@@ -1,8 +1,10 @@
 pub mod app;
+pub mod cli;
 pub mod config;
 pub mod editor;
 pub mod error;
 pub mod format;
+pub mod interrupt;
 pub mod note;
 pub mod resolver;
 pub mod vault;

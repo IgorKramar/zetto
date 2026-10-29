@@ -1,0 +1,386 @@
+use serde_json::Value;
+use std::process::{Command, Output, Stdio};
+use tempfile::TempDir;
+
+fn cli(vault: &std::path::Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_zetto"))
+        .arg("--vault")
+        .arg(vault)
+        .arg("--format=json")
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+fn json(out: &Output) -> Value {
+    serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {:?}", out))
+}
+#[test]
+fn cycle_and_saved_draft() {
+    let temp = TempDir::new().unwrap();
+    let vault = temp.path().join("notes");
+    let root = cli(&vault, &["init"]);
+    assert!(root.status.success(), "{root:?}");
+    let root = json(&root)["data"]["id"].as_str().unwrap().to_owned();
+    let draft = cli(&vault, &["capture", "тело\r\n", "--title", "Мысль"]);
+    assert!(draft.status.success(), "{draft:?}");
+    let draft = json(&draft);
+    let id = draft["data"]["id"].as_str().unwrap();
+    assert_eq!(
+        json(&cli(&vault, &["show", id]))["data"]["body"],
+        "тело\r\n"
+    );
+    assert!(cli(&vault, &["link", id, &root]).status.success());
+    assert!(cli(&vault, &["publish", id]).status.success());
+    let failed = cli(&vault, &["new", "сохранить\n", "--title", "Другая"]);
+    assert_eq!(failed.status.code(), Some(1));
+    let failed = json(&failed);
+    assert_eq!(failed["status"], "draft_saved");
+    assert_eq!(failed["saved"], true);
+    assert_eq!(
+        json(&cli(
+            &vault,
+            &["show", failed["data"]["id"].as_str().unwrap()]
+        ))["data"]["body"],
+        "сохранить\n"
+    );
+}
+#[test]
+fn syntax_and_non_tty_are_structured() {
+    let temp = TempDir::new().unwrap();
+    for args in [
+        vec!["wat"],
+        vec!["list", "--limit", "0"],
+        vec!["show", "../../evil"],
+        vec!["--cached", "list"],
+        vec!["capture"],
+        vec!["edit", "01ARZ3NDEKTSV4RRFFQ69G5FAV"],
+        vec![],
+    ] {
+        let out = cli(temp.path(), &args);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
+        assert_eq!(json(&out)["status"], "error");
+    }
+    let raw = cli(
+        temp.path(),
+        &["show", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "--raw"],
+    );
+    assert_eq!(json(&raw)["error"]["code"], "usage");
+}
+
+#[test]
+fn jsonl_always_ends_with_summary() {
+    let temp = TempDir::new().unwrap();
+    assert!(cli(temp.path(), &["init"]).status.success());
+    for (args, expected_count, exit) in [
+        (vec!["list", "--stage=inbox"], 0, 0),
+        (vec!["list"], 1, 0),
+        (vec!["list", "--bad"], 0, 2),
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_zetto"))
+            .arg("--vault")
+            .arg(temp.path())
+            .arg("--format=jsonl")
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(exit), "{out:?}");
+        assert!(out.stdout.ends_with(b"\n"));
+        let rows: Vec<Value> = String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.last().unwrap()["type"], "summary");
+        assert_eq!(rows.last().unwrap()["data"]["count"], expected_count);
+    }
+}
+
+#[test]
+fn explicit_inputs_preserve_bytes_and_reject_invalid_data_before_write() {
+    use std::io::Write;
+    let temp = TempDir::new().unwrap();
+    assert!(cli(temp.path(), &["init"]).status.success());
+    let body = "первая\r\nвторая\n\n";
+    let file = temp.path().join("input.txt");
+    std::fs::write(&file, body).unwrap();
+    let captured = cli(temp.path(), &["capture", "--file", file.to_str().unwrap()]);
+    let captured = json(&captured);
+    let id = captured["data"]["id"].as_str().unwrap();
+    assert_eq!(json(&cli(temp.path(), &["show", id]))["data"]["body"], body);
+    let raw = Command::new(env!("CARGO_BIN_EXE_zetto"))
+        .arg("--vault")
+        .arg(temp.path())
+        .args(["show", id, "--raw"])
+        .output()
+        .unwrap();
+    assert!(raw.status.success());
+    assert_eq!(
+        raw.stdout,
+        std::fs::read(temp.path().join(captured["data"]["path"].as_str().unwrap())).unwrap()
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_zetto"))
+        .arg("--vault")
+        .arg(temp.path())
+        .args(["--format=json", "capture", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(body.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let value = json(&out);
+    assert_eq!(
+        json(&cli(
+            temp.path(),
+            &["show", value["data"]["id"].as_str().unwrap()]
+        ))["data"]["body"],
+        body
+    );
+    for bytes in [vec![0xff], vec![b'x'; 16 * 1024 * 1024 + 1]] {
+        std::fs::write(&file, bytes).unwrap();
+        let out = cli(temp.path(), &["capture", "--file", file.to_str().unwrap()]);
+        assert_eq!(json(&out)["error"]["code"], "validation_failed");
+        assert_eq!(json(&out)["saved"], false);
+    }
+    assert_eq!(
+        std::fs::read_dir(temp.path().join("inbox"))
+            .unwrap()
+            .count(),
+        2
+    );
+    let empty = cli(temp.path(), &["capture", ""]);
+    assert!(empty.status.success());
+    assert_eq!(
+        json(&cli(
+            temp.path(),
+            &["show", json(&empty)["data"]["id"].as_str().unwrap()]
+        ))["data"]["body"],
+        ""
+    );
+}
+
+#[test]
+fn pipe_is_never_an_implicit_source() {
+    use std::io::Write;
+    let temp = TempDir::new().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_zetto"))
+        .arg("--vault")
+        .arg(temp.path())
+        .args(["--format=json", "capture"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let _ = child.stdin.take().unwrap().write_all(b"must not be read");
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(json(&out)["error"]["code"], "interaction_required");
+    assert!(!temp.path().join("inbox").exists());
+}
+
+#[test]
+fn discovery_and_editor_settings_have_no_hidden_execution() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let default = home.join(".zetto/notes");
+    let env_vault = temp.path().join("environment");
+    let config = temp.path().join("config/zetto");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("config.toml"),
+        "editor = [\"definitely-not-an-editor\"]\n",
+    )
+    .unwrap();
+    let call = |args: &[&str], cwd: &std::path::Path, vault: Option<&std::path::Path>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_zetto"));
+        command
+            .args(["--format=json"])
+            .args(args)
+            .current_dir(cwd)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", temp.path().join("config"))
+            .env_remove("ZETTO_VAULT")
+            .stdin(Stdio::null());
+        if let Some(vault) = vault {
+            command.env("ZETTO_VAULT", vault);
+        }
+        command.output().unwrap()
+    };
+    assert!(call(&["init"], temp.path(), None).status.success());
+    assert!(default.join(".zettorc").exists());
+    assert!(
+        call(&["init"], temp.path(), Some(&env_vault))
+            .status
+            .success()
+    );
+    assert!(env_vault.join(".zettorc").exists());
+    let nested = env_vault.join("assets/nested");
+    std::fs::create_dir(&nested).unwrap();
+    assert!(call(&["list"], &nested, None).status.success());
+    let out = call(
+        &["--vault", default.to_str().unwrap(), "list"],
+        &nested,
+        Some(&env_vault),
+    );
+    assert!(out.status.success());
+    let default_root = json(&cli(&default, &["list"]))["data"]["items"][0]["id"].clone();
+    assert_eq!(json(&out)["data"]["items"][0]["id"], default_root);
+    let out = cli(
+        &default,
+        &["init", temp.path().join("other").to_str().unwrap()],
+    );
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn pagination_and_doctor_are_exposed() {
+    let temp = TempDir::new().unwrap();
+    assert!(cli(temp.path(), &["init"]).status.success());
+    for body in ["one", "two"] {
+        assert!(cli(temp.path(), &["capture", body]).status.success());
+    }
+    let page = json(&cli(temp.path(), &["list", "--stage=inbox", "--limit=1"]));
+    assert_eq!(page["truncated"], true);
+    assert_eq!(page["complete"], false);
+    assert_eq!(page["data"]["next_offset"], 1);
+    assert_eq!(
+        json(&cli(temp.path(), &["list", "--stage=inbox", "--offset=2"]))["data"]["items"],
+        serde_json::json!([])
+    );
+    assert!(cli(temp.path(), &["doctor"]).status.success());
+    let root = json(&cli(temp.path(), &["list"]))["data"]["items"][0].clone();
+    let vault = zetto::vault::Vault::open(temp.path()).unwrap();
+    for mode in ["--resume", "--restore"] {
+        let guard = vault.lock().unwrap();
+        let plan = vault
+            .begin_edit(&guard, root["path"].as_str().unwrap())
+            .unwrap();
+        drop(guard);
+        assert_eq!(
+            json(&cli(temp.path(), &["doctor"]))["data"]["operations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let out = cli(
+            temp.path(),
+            &["doctor", "--operation", &plan.operation_id, mode],
+        );
+        assert!(out.status.success(), "{out:?}");
+        assert!(
+            json(&cli(temp.path(), &["doctor"]))["data"]["operations"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        cli(temp.path(), &["doctor", "--resume"]).status.code(),
+        Some(2)
+    );
+}
+
+#[test]
+fn occupied_writer_lock_refuses_cli_without_overwrite() {
+    let temp = TempDir::new().unwrap();
+    assert!(cli(temp.path(), &["init"]).status.success());
+    let vault = zetto::vault::Vault::open(temp.path()).unwrap();
+    let guard = vault.lock().unwrap();
+    for _ in 0..2 {
+        let out = cli(temp.path(), &["capture", "must not be written"]);
+        assert_eq!(out.status.code(), Some(3));
+        assert_eq!(json(&out)["error"]["code"], "lock_busy");
+    }
+    assert_eq!(
+        std::fs::read_dir(temp.path().join("inbox"))
+            .unwrap()
+            .count(),
+        0
+    );
+    drop(guard);
+    assert!(
+        cli(temp.path(), &["capture", "after unlock"])
+            .status
+            .success()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sigint_saves_received_stdin_and_does_not_wait_for_eof() {
+    use std::io::Write;
+    let temp = TempDir::new().unwrap();
+    assert!(cli(temp.path(), &["init"]).status.success());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_zetto"))
+        .arg("--vault")
+        .arg(temp.path())
+        .args(["--format=json", "new", "--stdin", "--title", "Прервано"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    input.write_all("принято\n".as_bytes()).unwrap();
+    // Даём обработчику установиться и читателю принять байты; stdin остаётся открыт.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    assert!(
+        Command::new("kill")
+            .args(["-INT", &child.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let start = std::time::Instant::now();
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "SIGINT завис на stdin"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    drop(input);
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(130), "{out:?}");
+    let value = json(&out);
+    assert_eq!(value["saved"], true);
+    assert_eq!(value["error"]["code"], "interrupted");
+    let show = json(&cli(
+        temp.path(),
+        &["show", value["data"]["id"].as_str().unwrap()],
+    ));
+    assert_eq!(show["data"]["stage"], "inbox");
+    assert_eq!(show["data"]["body"], "принято\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn broken_pipe_exits_four_after_one_save() {
+    let temp = TempDir::new().unwrap();
+    assert!(cli(temp.path(), &["init"]).status.success());
+    let mut child = Command::new(env!("CARGO_BIN_EXE_zetto"))
+        .arg("--vault")
+        .arg(temp.path())
+        .args(["--format=json", "capture", "saved once"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    assert_eq!(child.wait().unwrap().code(), Some(4));
+    assert_eq!(
+        std::fs::read_dir(temp.path().join("inbox"))
+            .unwrap()
+            .count(),
+        1
+    );
+}

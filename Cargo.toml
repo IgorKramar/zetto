@@ -20,3 +20,5 @@ sha2 = "0.10"
 tempfile = "3"
 toml = "1.1"
 shell-words = "1.1"
+clap = { version = "4.6", features = ["derive"] }
+ctrlc = "3.5.2"
