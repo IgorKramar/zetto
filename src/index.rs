@@ -57,14 +57,33 @@ pub struct ScanMetrics {
     pub files_read: usize,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct Cancellation(Arc<AtomicBool>);
+#[derive(Clone, Debug)]
+pub struct Cancellation {
+    cancelled: Arc<AtomicBool>,
+    observe_signals: bool,
+}
+impl Default for Cancellation {
+    fn default() -> Self {
+        Self {
+            cancelled: Arc::default(),
+            observe_signals: true,
+        }
+    }
+}
 impl Cancellation {
+    // Уже начатая управляемая запись завершается по файловому протоколу.
+    pub(crate) fn local_only() -> Self {
+        Self {
+            observe_signals: false,
+            ..Self::default()
+        }
+    }
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Relaxed);
+        self.cancelled.store(true, Ordering::Relaxed);
     }
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
+        self.cancelled.load(Ordering::Relaxed)
+            || (self.observe_signals && crate::interrupt::requested())
     }
     pub fn check(&self) -> Result<()> {
         if self.is_cancelled() {
@@ -296,27 +315,32 @@ impl Index {
         result
     }
     pub fn links(&self) -> Result<Vec<IndexedLink>> {
-        let mut statement = self.connection.prepare("SELECT s.path,t.path,l.link,l.reason FROM links l JOIN files s ON s.file_key=l.source_key LEFT JOIN files t ON t.file_key=l.target_key ORDER BY s.id,s.path,l.source_offset").map_err(unavailable)?;
-        let rows = statement
-            .query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, Option<String>>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                ))
-            })
+        load_links(&self.connection)
+    }
+    pub fn note_snapshot(&mut self, id: &str, token: &Cancellation) -> Result<(Catalog, String)> {
+        token.check()?;
+        let transaction = self.connection.transaction().map_err(unavailable)?;
+        let catalog = load_catalog(&transaction)?;
+        let record = catalog.find(id)?;
+        let body = transaction
+            .query_row(
+                "SELECT n.body FROM notes_fts n JOIN files f ON f.file_key=n.rowid WHERE f.path=?1",
+                [&record.path],
+                |r| r.get::<_, String>(0),
+            )
             .map_err(unavailable)?;
-        rows.map(|row| {
-            let (source_path, target_path, link, reason) = row.map_err(unavailable)?;
-            Ok(IndexedLink {
-                source_path,
-                target_path,
-                link: decode(&link)?,
-                reason,
-            })
-        })
-        .collect()
+        token.check()?;
+        transaction.commit().map_err(unavailable)?;
+        Ok((catalog, body))
+    }
+    pub fn links_snapshot(&mut self, token: &Cancellation) -> Result<(Catalog, Vec<IndexedLink>)> {
+        token.check()?;
+        let transaction = self.connection.transaction().map_err(unavailable)?;
+        let catalog = load_catalog(&transaction)?;
+        let links = load_links(&transaction)?;
+        token.check()?;
+        transaction.commit().map_err(unavailable)?;
+        Ok((catalog, links))
     }
     pub fn rebuild(
         &mut self,
@@ -870,4 +894,28 @@ fn check_cache_path(path: &Path, create: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn load_links(connection: &Connection) -> Result<Vec<IndexedLink>> {
+    let mut statement = connection.prepare("SELECT s.path,t.path,l.link,l.reason FROM links l JOIN files s ON s.file_key=l.source_key LEFT JOIN files t ON t.file_key=l.target_key ORDER BY s.id,s.path,l.source_offset").map_err(unavailable)?;
+    let rows = statement
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(unavailable)?;
+    rows.map(|row| {
+        let (source_path, target_path, link, reason) = row.map_err(unavailable)?;
+        Ok(IndexedLink {
+            source_path,
+            target_path,
+            link: decode(&link)?,
+            reason,
+        })
+    })
+    .collect()
 }

@@ -1,7 +1,15 @@
+use crate::app::Warning;
+use crate::index::Freshness;
 use crate::note::Diagnostic;
 use serde_json::Value;
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Clone, Debug, Default)]
+pub struct ErrorContext {
+    pub warnings: Vec<Warning>,
+    pub freshness: Freshness,
+}
 
 #[derive(Clone, Debug)]
 pub struct Error {
@@ -9,6 +17,7 @@ pub struct Error {
     pub message: String,
     pub exit: u8,
     pub saved: bool,
+    pub context: Box<ErrorContext>,
     pub data: Option<Box<Value>>,
     pub diagnostics: Vec<Diagnostic>,
     pub recovery: Vec<String>,
@@ -28,6 +37,7 @@ impl Error {
             message: message.into(),
             exit,
             saved: false,
+            context: Box::default(),
             data: None,
             diagnostics: Vec::new(),
             recovery: Vec::new(),
