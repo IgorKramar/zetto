@@ -17,9 +17,11 @@ rg/fzf — необязательные внешние инструменты. �
 не требует связи, публикация требует связи на другую опубликованную заметку
 с одним явным root-исключением.
 
-**Текущее состояние:** этап 0 принят владельцем 2026-10-29. В дереве есть
-контракты, корпуса и изолированный YAML-стенд; приложение ещё не реализовано.
-Реализация начинается с v0.1 по [принятому пакету](docs/contracts/stage-0.md).
+**Текущее состояние:** реализован минимальный цикл v0.1.0-dev: CLI/JSON,
+TUI, общее ядро операций, безопасная запись и файловое восстановление.
+Контракты этапа 0 приняты владельцем 2026-10-29; приёмка приложения
+отделена от реализации и публикации релиза.
+[План v0.1](docs/plans/2026-10-29-v0.1-minimal-note-cycle.md).
 
 Проект переименован из `zk` в `zetto` в [ADR-0001](./docs/architecture/decisions/0001-project-name-and-ecosystem-positioning.md) (2026-05-09).
 
@@ -54,14 +56,14 @@ Capture не ждёт полной сверки графа. Обход/stat из
 ## 3. High-level structure
 
 По [ADR-0007](docs/architecture/decisions/0007-shared-cli-tui-core.md)
-приложение будет одним Cargo package с библиотекой и бинарником.
+приложение — один Cargo package с библиотекой и бинарником.
 `cli`/`tui` вызывают `app`; операции используют `note`/`format`, `vault`,
 `editor` и `config`. `app` не зависит от stdout, клавиатуры или terminal UI.
 `vault` отвечает за пути, блокировки, backup и recovery; `format` не знает ФС.
 В v0.1 каталог заметок производный, в памяти; индекс SQLite относится к v0.2.
 
 `tools/format-probe` — отдельный проверочный пакет этапа 0, не пакет приложения.
-Он снимает неопределённость YAML и не задаёт публичный Rust API.
+Он переиспользует production parser и проверяет YAML-корпус; публичного Rust SDK нет.
 Корпуса и генератор находятся в `tests/corpus` и `tools/corpus.py`.
 Нормативный [format-v1](docs/format-v1.md),
 [CLI/JSON](docs/contracts/cli-v1.md), [макеты TUI](docs/contracts/tui-v1.md).
@@ -111,7 +113,7 @@ ADR-0005–0008 имеют приоритет над перечисленным�
 
 - ~~**Q1. Схема ID заметок.**~~ — закрыт [ADR-0002](./docs/architecture/decisions/0002-note-id-scheme-and-filename-layout.md): ULID во frontmatter + `<ULID>-<slug>.md` filename.
 - ~~**Q2. Синтаксис ссылок.**~~ — закрыт [ADR-0003](./docs/architecture/decisions/0003-link-representation.md): wikilink-primary `[[ULID]]` / `[[ULID|display]]` + canonical markdown read-compat; embeds/anchors/block-refs deferred to v2.
-- **Q3. Хранилище графа/индекса.** In-memory rebuild при каждом запуске (zero state, but cold-start cost) vs persistent index (sqlite/sled/JSON sidecar — быстро, но invalidation и sync). Критично для Capture latency и Note graph engine track.
+- **Q3. Производный индекс v0.2.** В v0.1 работает обход в памяти; принятый план вводит SQLite/FTS5 в v0.2. Схема, инкрементальная сверка и протокол свежести ещё не реализованы.
 - ~~**Q4. Граница TUI vs CLI-pipe.**~~ — закрыт [ADR-0007](docs/architecture/decisions/0007-shared-cli-tui-core.md): общее ядро, независимые адаптеры и машинный контракт с первой команды.
 - ~~**Q5. Степень принуждения constraints.**~~ — закрыт [ADR-0008](docs/architecture/decisions/0008-capture-publish-and-root.md): capture без связи; строгость при publish, видимое root-исключение.
 
