@@ -212,6 +212,12 @@ class Pty:
     def wait_ready(self):
         self.until(lambda: not any(marker in self.visible() for marker in ("Сверка…", "Загрузка предпросмотра…")), "каталог и предпросмотр готовы")
 
+    def picker_ready(self, query, target):
+        lines = self.visible().splitlines()
+        header = "".join(lines[1].split())
+        return (f"Связь:/{query}[ВВОД]·опубликованнаязаметка" in header
+                and lines[2].lstrip("│ ").startswith(">") and target in lines[2])
+
     def paste(self, text):
         self.send(b"\x1b[200~" + text.encode() + b"\x1b[201~")
 
@@ -230,6 +236,19 @@ class Pty:
         finally:
             os.close(self.master)
             os.close(self.slave)
+
+
+def check_picker_ready():
+    ui = Pty.__new__(Pty)
+    old = "> Корень · root-id\n日本語 заметка · target-id"
+    for header, candidates, expected in (
+        ("Связь: /  · опубликованная заметка", old, False),
+        ("Связь: / 日本語 [ВВОД] · Поиск…", old, False),
+        ("Связь: / другое [ВВОД] · опубликованная заметка", "> 日本語 · target-id", False),
+        ("Связь: / 日本語 [ВВОД] · опубликованная заметка", "> 日本語 · target-id", True),
+    ):
+        ui.output = bytearray(("\x1b[2J\x1b[2;1H" + header + "\x1b[3;1H" + candidates).encode())
+        assert ui.picker_ready("日本語", "target-id") is expected, (header, ui.visible().splitlines()[:4])
 
 
 def check_cached_startup(root, env):
@@ -287,7 +306,9 @@ def check_worker_ui(root, env):
         ui.send("/")
         ui.paste("日本語")
         ui.send("\r")  # Enter при pending не выбирает старый первый элемент.
-        ui.until(lambda: "[[" in (vault / draft["path"]).read_text() or ("日本語" in "".join(ui.visible().split()) and "Поиск…" not in ui.visible()), "актуальный Unicode fuzzy")
+        ui.until(lambda: "[[" in (vault / draft["path"]).read_text() or ui.picker_ready("日本語", second["id"]), "актуальный Unicode fuzzy")
+        if "Поисксвязи…дождитесьактуальногорезультата" in "".join(ui.visible().split()):
+            assert "[[" not in (vault / draft["path"]).read_text(), "отвергнутый ранний Enter создал ссылку"
         if "[[" not in (vault / draft["path"]).read_text():
             ui.send("\r")
         ui.until(lambda: second["id"] in (vault / draft["path"]).read_text(), "fuzzy выбрал японский title")
@@ -367,6 +388,7 @@ def check_editor_worker_owns_tty(root, env):
 def main():
     check_drain_eof()
     check_pty_exit()
+    check_picker_ready()
     with tempfile.TemporaryDirectory(prefix="zetto-pty-") as temp:
         root = Path(temp)
         vault = root / "vault"
