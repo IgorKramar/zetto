@@ -229,6 +229,25 @@ class Pty:
             os.close(self.slave)
 
 
+def check_cached_startup(root, env):
+    vault = root / "cached-startup"
+    note = cli(vault, "init")
+    cli(vault, "list")
+    path = vault / note["path"]
+    changed = path.read_text().replace("Корень", "Свежий старт")
+    path.write_text(changed)
+    ui = Pty(vault, env)
+    try:
+        # Событие произошло до установки watcher: cached должен смениться stat-результатом.
+        ui.wait("Свежий старт")
+        ui.send("q")
+        ui.finish(0)
+        assert path.read_text() == changed, "Startup-сверка изменила заметку"
+    except BaseException:
+        ui.abort()
+        raise
+
+
 def check_worker_ui(root, env):
     vault = root / "worker-vault"
     root_id = cli(vault, "init")["id"]
@@ -353,6 +372,7 @@ def main():
         editor.chmod(0o700)
         env = dict(os.environ, EDITOR=str(editor), VISUAL=str(editor), XDG_CONFIG_HOME=str(root / "config"), TERM="xterm-256color", NO_COLOR="1")
         check_cli_editor(root, env)
+        check_cached_startup(root, env)
         check_worker_ui(root, env)
         check_editor_worker_owns_tty(root, env)
         ui = Pty(vault, env)

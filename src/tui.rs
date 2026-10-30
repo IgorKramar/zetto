@@ -580,7 +580,13 @@ pub fn run(app: App, color: bool) -> Result<()> {
     };
     let mut ui = Ui::new();
     let mut worker = Worker::start(app.clone());
-    ui.refresh(&mut worker, initial_mode, None);
+    let mut warmup = if initial_mode == FreshnessMode::Stat {
+        ui.catalog_loading = true;
+        Some(worker.read(Read::Catalog(FreshnessMode::Cached)))
+    } else {
+        ui.refresh(&mut worker, initial_mode, None);
+        None
+    };
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore();
@@ -626,6 +632,16 @@ pub fn run(app: App, color: bool) -> Result<()> {
                     Ok(reply) => {
                         // Устаревший ответ не вызывает даже декоративную перерисовку.
                         if reply.lane.is_none_or(|lane| worker.current(lane, reply.id)) {
+                            if matches!(reply.lane, Some(Lane::Catalog))
+                                && warmup.take() == Some(reply.id)
+                            {
+                                if reply.result.is_ok() {
+                                    ui.reply(&mut worker, reply, mode);
+                                }
+                                ui.refresh(&mut worker, initial_mode, None);
+                                dirty = true;
+                                continue;
+                            }
                             let catalog_error =
                                 matches!(reply.lane, Some(Lane::Catalog)) && reply.result.is_err();
                             let quiet = !drawn_catalog_loading
@@ -661,7 +677,7 @@ pub fn run(app: App, color: bool) -> Result<()> {
                 watch_full |= freshness == FreshnessMode::Full;
                 watch_due.get_or_insert_with(Instant::now);
             }
-            let periodic = reconcile.elapsed() >= Duration::from_secs(5);
+            let periodic = reconcile.elapsed() >= Duration::from_secs(60);
             let notified =
                 watch_due.is_some_and(|due: Instant| due.elapsed() >= Duration::from_millis(150));
             if ui.exit.is_none() && !ui.catalog_loading && (periodic || notified) {

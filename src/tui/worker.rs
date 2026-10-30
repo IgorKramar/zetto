@@ -159,7 +159,7 @@ impl Worker {
                 });
             if let Err(error) = &watcher {
                 *watch_warning.lock().unwrap() = Some(format!(
-                    "! Наблюдение недоступно: {error}; периодическая сверка включена"
+                    "! Наблюдение недоступно: {error}; сверка раз в минуту, r — сейчас"
                 ));
             }
             // Рекурсивный watch переживает замену каталога inbox.
