@@ -668,6 +668,7 @@ impl Index {
         self.connection
             .progress_handler(0, None::<fn() -> bool>)
             .map_err(unavailable)?;
+        token.check()?;
         result
     }
 }
@@ -898,4 +899,59 @@ fn load_links(connection: &Connection) -> Result<Vec<IndexedLink>> {
         })
     })
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+    #[test]
+    fn cancelling_catalog_read_reports_interrupted_and_clears_progress_handler() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection.execute("UPDATE meta SET ready=1", []).unwrap();
+        let record = Record::from_text(
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV.md".into(),
+            "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: Проверка\n---\n".into(),
+        );
+        connection
+            .execute(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<2000)
+             INSERT INTO files(path,readable,parsed,snapshot) SELECT 'note-'||i,1,?1,?1 FROM n",
+                [encode(&record).unwrap()],
+            )
+            .unwrap();
+        let token = Cancellation::default();
+        let cancellation = token.clone();
+        connection
+            .authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "files",
+                        column_name: "snapshot",
+                    }
+                ) {
+                    cancellation.cancel();
+                }
+                Authorization::Allow
+            }))
+            .unwrap();
+        let mut index = Index {
+            connection,
+            path: PathBuf::new(),
+        };
+        assert!(!token.is_cancelled());
+        let error = index
+            .search_fts_snapshot("", false, 10, 0, &token)
+            .unwrap_err();
+        assert!(token.is_cancelled());
+        assert_eq!(error.code, "interrupted");
+        index
+            .connection
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .unwrap();
+        assert_eq!(index.snapshot().unwrap().records.len(), 2000);
+    }
 }
