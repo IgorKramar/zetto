@@ -12,6 +12,18 @@ fn cli(vault: &std::path::Path, args: &[&str]) -> Output {
         .output()
         .unwrap()
 }
+
+#[cfg(unix)]
+#[test]
+fn invalid_utf8_vault_path_is_rejected_before_creating_notes() {
+    use std::os::unix::ffi::OsStrExt;
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join(std::ffi::OsStr::from_bytes(b"bad-\xff"));
+    let out = cli(&path, &["init"]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(json(&out)["error"]["code"], "invalid_config");
+    assert!(!path.exists());
+}
 fn json(out: &Output) -> Value {
     serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {:?}", out))
 }
