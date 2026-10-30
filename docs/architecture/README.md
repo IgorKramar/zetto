@@ -22,6 +22,7 @@ section 5.
 
 | # | Date | Status | Decision |
 |---|---|---|---|
+| [0009](./decisions/0009-publish-derived-index-generations.md) | 2026-10-30 | Accepted | Производный SQLite/FTS5 и generation |
 | [0008](./decisions/0008-capture-publish-and-root.md) | 2026-10-29 | Accepted | Capture/publish и root |
 | [0007](./decisions/0007-shared-cli-tui-core.md) | 2026-10-29 | Accepted | Общее ядро CLI/TUI |
 | [0006](./decisions/0006-safe-writes-and-recovery.md) | 2026-10-29 | Accepted | Безопасная запись и recovery |

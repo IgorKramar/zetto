@@ -6,6 +6,7 @@
 
 | # | Date | Status | Decision |
 |---|---|---|---|
+| [0009](./0009-publish-derived-index-generations.md) | 2026-10-30 | Accepted | Производный SQLite/FTS5, generation, свежесть и worker |
 | [0008](./0008-capture-publish-and-root.md) | 2026-10-29 | Accepted | Capture/publish, root и уточнение STRATEGY |
 | [0007](./0007-shared-cli-tui-core.md) | 2026-10-29 | Accepted | Общее ядро CLI/TUI |
 | [0006](./0006-safe-writes-and-recovery.md) | 2026-10-29 | Accepted | Конкурентная запись и recovery |

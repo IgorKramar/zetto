@@ -90,6 +90,7 @@ Capture не ждёт полной сверки графа. Обход/stat из
 
 | # | Date | Status | Decision |
 |---|---|---|---|
+| [0009](./docs/architecture/decisions/0009-publish-derived-index-generations.md) | 2026-10-30 | Accepted | Производный индекс согласованными поколениями (v0.2) |
 | [0008](./docs/architecture/decisions/0008-capture-publish-and-root.md) | 2026-10-29 | Accepted | Capture без связи, строгая публикация, явный root; уточнение STRATEGY |
 | [0007](./docs/architecture/decisions/0007-shared-cli-tui-core.md) | 2026-10-29 | Accepted | Общее ядро CLI/TUI, один Cargo package |
 | [0006](./docs/architecture/decisions/0006-safe-writes-and-recovery.md) | 2026-10-29 | Accepted | Короткий lock, hash/backup, устойчивые рабочие копии и recovery-план |
