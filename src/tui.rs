@@ -118,6 +118,7 @@ enum Exit {
 struct Ui {
     catalog: Catalog,
     catalog_loading: bool,
+    catalog_error: Option<String>,
     by_path: BTreeMap<String, usize>,
     select_id: Option<String>,
     inbox: bool,
@@ -149,6 +150,7 @@ impl Ui {
                 complete: false,
             },
             catalog_loading: false,
+            catalog_error: None,
             by_path: BTreeMap::new(),
             select_id: None,
             inbox: false,
@@ -248,6 +250,19 @@ impl Ui {
             Ok(out) => outcome_text(&out),
             Err(error) => error_text(&error),
         };
+    }
+    fn status(&self) -> String {
+        let mut message = self.message.clone();
+        if let Some(error) = &self.catalog_error {
+            if let Some(saved) = &self.last_saved {
+                let saved = outcome_text(saved);
+                if message != saved {
+                    message.push_str(&format!("\n{saved}"));
+                }
+            }
+            message.push_str(&format!("\nСверка: {error}"));
+        }
+        message
     }
     fn writing(&mut self) {
         self.catalog_loading = false;
@@ -350,6 +365,7 @@ impl Ui {
                     self.catalog_loading = false;
                     match reply.result {
                         Ok(Data::Catalog(catalog)) => {
+                            self.catalog_error = None;
                             let path = self.current().map(|r| r.path.clone());
                             let old_id = self.current().and_then(Record::id).map(str::to_owned);
                             let changed = self.catalog.freshness.generation.is_none()
@@ -394,11 +410,7 @@ impl Ui {
                             }
                         }
                         Err(error) => {
-                            self.message = if let Some(saved) = &self.last_saved {
-                                format!("{}\nСверка: {}", outcome_text(saved), error_text(&error))
-                            } else {
-                                error_text(&error)
-                            }
+                            self.catalog_error = Some(error_text(&error));
                         }
                         _ => {}
                     }
@@ -645,6 +657,7 @@ pub fn run(app: App, color: bool) -> Result<()> {
                             let catalog_error =
                                 matches!(reply.lane, Some(Lane::Catalog)) && reply.result.is_err();
                             let quiet = !drawn_catalog_loading
+                                && ui.catalog_error.is_none()
                                 && ui.select_id.is_none()
                                 && match &reply.result {
                                     Ok(Data::Catalog(catalog)) => {
@@ -652,12 +665,12 @@ pub fn run(app: App, color: bool) -> Result<()> {
                                     }
                                     _ => false,
                                 };
-                            let message = ui.message.clone();
+                            let message = ui.status();
                             ui.reply(&mut worker, reply, mode);
                             dirty |= !(quiet
                                 || (catalog_error
                                     && !drawn_catalog_loading
-                                    && message == ui.message));
+                                    && message == ui.status()));
                         }
                     }
                     Err(TryRecvError::Empty) => break,
@@ -1104,7 +1117,7 @@ fn draw(frame: &mut Frame, ui: &Ui, color: bool) {
         frame.render_widget(
             Paragraph::new(format!(
                 "Нужно ≥60×12. Ввод сохранён в памяти. q/Esc — сохранить и выйти.\n{}",
-                safe(&ui.message)
+                safe(&ui.status())
             ))
             .wrap(Wrap { trim: false }),
             area,
@@ -1239,7 +1252,7 @@ fn draw(frame: &mut Frame, ui: &Ui, color: bool) {
             );
         }
     }
-    let mut message = ui.message.clone();
+    let mut message = ui.status();
     if let Some(warning) = &ui.watch_warning {
         message.push_str(&format!("\n{warning}"));
     }
@@ -1527,6 +1540,62 @@ mod tests {
         assert_eq!(app.vault.read(&original.path).unwrap(), original_bytes);
     }
     #[test]
+    fn catalog_error_does_not_hide_unconfirmed_form() {
+        let (_dir, app) = app();
+        let mut worker = Worker::start(app.clone());
+        let mut ui = Ui::new();
+        ui.form = Some(Form {
+            body: "retry accepted".into(),
+            ..Form::default()
+        });
+        ui.failed_exit(Error::new("io", "save failed"));
+        let message = ui.message.clone();
+        let id = worker.read(Read::Catalog(FreshnessMode::Stat));
+        ui.reply(
+            &mut worker,
+            Reply {
+                id,
+                lane: Some(Lane::Catalog),
+                result: Err(Error::new("io", "config missing")),
+            },
+            FreshnessMode::Stat,
+        );
+        assert_eq!(ui.message, message);
+        assert!(ui.status().contains("config missing"));
+        assert_eq!(ui.form.as_ref().unwrap().body, "retry accepted");
+        assert!(ui.exit.is_none());
+        let mut catalog = app.scan().unwrap();
+        catalog.freshness.generation = Some(1);
+        catalog.warnings.push(crate::app::Warning {
+            code: "index_stale".into(),
+            message: "Фоновое предупреждение".into(),
+            path: None,
+        });
+        let id = worker.read(Read::Catalog(FreshnessMode::Stat));
+        ui.reply(
+            &mut worker,
+            Reply {
+                id,
+                lane: Some(Lane::Catalog),
+                result: Ok(Data::Catalog(catalog)),
+            },
+            FreshnessMode::Stat,
+        );
+        assert_eq!(ui.message, message);
+        assert!(ui.catalog_error.is_none());
+        let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(100, 28)).unwrap();
+        terminal.draw(|frame| draw(frame, &ui, false)).unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(rendered.contains("Текст НЕ подтверждён"));
+        assert!(rendered.contains("zetto/root-exception"));
+    }
+    #[test]
     fn catalog_error_keeps_confirmed_save_path_and_index_warning() {
         let (_dir, app) = app();
         let mut worker = Worker::start(app);
@@ -1549,9 +1618,9 @@ mod tests {
             },
             FreshnessMode::Stat,
         );
-        assert!(ui.message.contains("Сохранено saved-id inbox/saved.md"));
-        assert!(ui.message.contains("index_stale"));
-        assert!(ui.message.contains("index_unavailable"));
+        assert!(ui.status().contains("Сохранено saved-id inbox/saved.md"));
+        assert!(ui.status().contains("index_stale"));
+        assert!(ui.status().contains("index_unavailable"));
     }
     #[test]
     fn unchanged_reconciliation_does_not_require_a_frame() {

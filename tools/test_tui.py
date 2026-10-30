@@ -209,6 +209,9 @@ class Pty:
         wanted = "".join(marker.split())
         self.until(lambda: wanted in "".join(self.visible().split()), marker)
 
+    def wait_ready(self):
+        self.until(lambda: not any(marker in self.visible() for marker in ("Сверка…", "Загрузка предпросмотра…")), "каталог и предпросмотр готовы")
+
     def paste(self, text):
         self.send(b"\x1b[200~" + text.encode() + b"\x1b[201~")
 
@@ -320,7 +323,8 @@ def check_worker_ui(root, env):
         ui.until(lambda: "[ВВОД]" not in ui.visible(), "Esc вернул библиотеку")
         ui.send("r")
         ui.wait("Файлы сверены")
-        # Больше периода reconciliation: неизменные данные не очищают preview и не рисуют кадры.
+        ui.wait_ready()
+        # После завершения обоих запросов неизменные данные не рисуют кадры.
         ui.drain(0.1)
         idle_until = time.monotonic() + 5.7
         while time.monotonic() < idle_until:
@@ -406,6 +410,7 @@ def main():
             cli(vault, "capture", "external", "--title", "CLI concurrent")
             ui.send("r")
             ui.wait("Файлы сверены")
+            ui.wait_ready()
             ui.drain(0.05)
             assert ui.process.poll() is None, "TUI завершился до проверки простоя"
             assert not select.select([ui.master], [], [], 0.2)[0], "idle TUI постоянно перерисовывается"
