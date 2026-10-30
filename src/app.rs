@@ -2,16 +2,17 @@ use crate::config::VaultConfig;
 use crate::editor;
 use crate::error::{Error, Result};
 use crate::format::{self, valid_id};
+use crate::index::{Cancellation, Freshness, ScanMetrics};
 use crate::note::{Diagnostic, Note, Severity};
 use crate::resolver::{self, ResolutionKind};
 use crate::vault::{Guard, Plan, PlanKind, PlanState, RecoveryMode, Vault, hash};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::Path;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
     Published,
@@ -24,10 +25,13 @@ pub enum StageFilter {
     All,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Record {
     pub path: String,
+    #[serde(skip)]
     pub raw: Option<String>,
+    pub readable: bool,
+    pub tags: Vec<String>,
     pub note: Note,
     pub stage: Stage,
 }
@@ -40,7 +44,7 @@ pub fn filename_id(path: &str) -> Option<&str> {
 }
 
 impl Record {
-    fn from_text(path: String, raw: String) -> Self {
+    pub(crate) fn from_text(path: String, raw: String) -> Self {
         let mut note = format::parse(&raw);
         if let Some(prefix) = filename_id(&path) {
             let stem = Path::new(&path)
@@ -96,6 +100,14 @@ impl Record {
         };
         Self {
             path,
+            tags: note
+                .tags()
+                .into_iter()
+                .chain(format::inline_tags(&note.body))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            readable: true,
             raw: Some(raw),
             note,
             stage,
@@ -110,11 +122,11 @@ impl Record {
         self.note.id() == Some(id) || filename_id(&self.path) == Some(id)
     }
     pub fn data(&self) -> Value {
-        json!({"id":self.id(),"path":self.path,"title":self.note.title(),"stage":self.stage,"tags":self.note.tags(),"aliases":self.note.aliases(),"diagnostics":self.note.diagnostics})
+        json!({"id":self.id(),"path":self.path,"title":self.note.title(),"stage":self.stage,"tags":self.tags,"aliases":self.note.aliases(),"diagnostics":self.note.diagnostics})
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Warning {
     pub code: String,
     pub message: String,
@@ -122,6 +134,8 @@ pub struct Warning {
 }
 #[derive(Clone, Debug)]
 pub struct Catalog {
+    pub freshness: Freshness,
+    pub metrics: ScanMetrics,
     pub records: Vec<Record>,
     pub warnings: Vec<Warning>,
     pub complete: bool,
@@ -244,7 +258,6 @@ impl App {
 
     fn scan_with_config(&self, config: &VaultConfig, derive_links: bool) -> Result<Catalog> {
         let mut records = Vec::new();
-        let mut complete = true;
         for path in self.vault.note_paths()? {
             match self.vault.read(&path).and_then(|b| {
                 String::from_utf8(b).map_err(|_| Error::new("validation_failed", "Файл не UTF-8"))
@@ -262,118 +275,24 @@ impl App {
                     records.push(Record {
                         path,
                         raw: None,
+                        readable: false,
+                        tags: Vec::new(),
                         note: Note {
                             diagnostics: vec![d],
                             ..Note::default()
                         },
                         stage,
                     });
-                    complete = false;
                 }
             }
         }
-        let mut claims = BTreeMap::<String, BTreeSet<usize>>::new();
-        for (index, r) in records.iter().enumerate() {
-            for id in [r.note.id(), filename_id(&r.path)]
-                .into_iter()
-                .flatten()
-                .filter(|id| valid_id(id))
-            {
-                claims.entry(id.to_owned()).or_default().insert(index);
-            }
-        }
-        for (id, indices) in claims {
-            if indices.len() > 1 {
-                for index in indices {
-                    let r = &mut records[index];
-                    let mut d = Diagnostic::new(
-                        "zetto/duplicate-id",
-                        Severity::Error,
-                        format!("ULID {id} повторяется"),
-                    );
-                    d.path = Some(r.path.clone());
-                    r.note.diagnostics.push(d);
-                }
-            }
-        }
-        let mut derived = vec![Vec::new(); records.len()];
-        // ponytail: lookup по полному каталогу на ссылку; индекс заменит его в v0.2.
-        for (index, r) in records.iter().enumerate().filter(|_| derive_links) {
-            let mut connected = false;
-            for link in &r.note.links {
-                let resolution = resolver::resolve(&self.vault, &records, &r.path, link);
-                if let Some(target) = resolution.target {
-                    connected |= records[target].stage == Stage::Published
-                        && records[target].note.id() != r.note.id();
-                }
-                if let Some(mut d) = resolution.diagnostic {
-                    d.path = Some(r.path.clone());
-                    derived[index].push(d);
-                }
-            }
-            if r.id() == Some(config.root_id.as_str()) && r.stage == Stage::Published {
-                derived[index].push(Diagnostic::new(
-                    "zetto/root-exception",
-                    Severity::Info,
-                    "Корневая заметка исключена из требования исходящей связи",
-                ));
-            } else if r.stage == Stage::Published && r.id().is_some() && !connected {
-                derived[index].push(Diagnostic::new(
-                    "zetto/link-before-publish",
-                    Severity::Warning,
-                    "Нет связи на другую опубликованную заметку",
-                ));
-            }
-        }
-        for (r, diagnostics) in records.iter_mut().zip(derived) {
-            for mut d in diagnostics {
-                d.path = Some(r.path.clone());
-                push_diagnostic(&mut r.note.diagnostics, d);
-            }
-        }
-        records.sort_by(|a, b| {
-            a.note
-                .id()
-                .cmp(&b.note.id())
-                .then_with(|| a.path.cmp(&b.path))
-        });
-        let mut warnings = Vec::new();
-        match self.vault.plans() {
-            Ok(plans) => {
-                for p in plans.into_iter().filter(|p| p.unfinished()) {
-                    warnings.push(Warning {
-                        code: "recovery_available".into(),
-                        message: format!(
-                            "Рабочая копия/операция {}: {:?}",
-                            p.operation_id, p.state
-                        ),
-                        path: Some(format!(".zetto/recovery/{}/plan.json", p.operation_id)),
-                    });
-                }
-            }
-            Err(e) => warnings.push(Warning {
-                code: "recovery_required".into(),
-                message: e.message,
-                path: Some(".zetto/recovery".into()),
-            }),
-        }
-        if records
-            .iter()
-            .filter(|r| r.id() == Some(config.root_id.as_str()) && r.stage == Stage::Published)
-            .count()
-            != 1
-        {
-            warnings.push(Warning {
-                code: "root_invalid".into(),
-                message: "Корневая заметка отсутствует, повреждена или неоднозначна".into(),
-                path: Some(".zettorc".into()),
-            });
-        }
-        Ok(Catalog {
+        derive_catalog(
+            &self.vault,
+            config,
             records,
-            warnings,
-            complete,
-        })
+            derive_links,
+            &Cancellation::default(),
+        )
     }
 
     pub fn raw(&self, id: &str) -> Result<Vec<u8>> {
@@ -835,6 +754,118 @@ fn validate_note_id(note: &Note, id: &str) -> Result<()> {
     }
     Ok(())
 }
+pub(crate) fn derive_catalog(
+    vault: &Vault,
+    config: &VaultConfig,
+    mut records: Vec<Record>,
+    derive_links: bool,
+    token: &Cancellation,
+) -> Result<Catalog> {
+    let mut claims = BTreeMap::<String, BTreeSet<usize>>::new();
+    for (index, r) in records.iter().enumerate() {
+        for id in [r.note.id(), filename_id(&r.path)]
+            .into_iter()
+            .flatten()
+            .filter(|id| valid_id(id))
+        {
+            claims.entry(id.to_owned()).or_default().insert(index);
+        }
+    }
+    for (id, indices) in claims {
+        if indices.len() > 1 {
+            for index in indices {
+                let r = &mut records[index];
+                let mut d = Diagnostic::new(
+                    "zetto/duplicate-id",
+                    Severity::Error,
+                    format!("ULID {id} повторяется"),
+                );
+                d.path = Some(r.path.clone());
+                r.note.diagnostics.push(d);
+            }
+        }
+    }
+    let mut derived = vec![Vec::new(); records.len()];
+    let resolver = resolver::Resolver::new(&records);
+    for (index, r) in records.iter().enumerate().filter(|_| derive_links) {
+        token.check()?;
+        let mut connected = false;
+        for link in &r.note.links {
+            let resolution = resolver.resolve(vault, &r.path, link);
+            if let Some(target) = resolution.target {
+                connected |= records[target].stage == Stage::Published
+                    && records[target].note.id() != r.note.id();
+            }
+            if let Some(mut d) = resolution.diagnostic {
+                d.path = Some(r.path.clone());
+                derived[index].push(d);
+            }
+        }
+        if r.id() == Some(config.root_id.as_str()) && r.stage == Stage::Published {
+            derived[index].push(Diagnostic::new(
+                "zetto/root-exception",
+                Severity::Info,
+                "Корневая заметка исключена из требования исходящей связи",
+            ));
+        } else if r.stage == Stage::Published && r.id().is_some() && !connected {
+            derived[index].push(Diagnostic::new(
+                "zetto/link-before-publish",
+                Severity::Warning,
+                "Нет связи на другую опубликованную заметку",
+            ));
+        }
+    }
+    for (r, diagnostics) in records.iter_mut().zip(derived) {
+        for mut d in diagnostics {
+            d.path = Some(r.path.clone());
+            push_diagnostic(&mut r.note.diagnostics, d);
+        }
+    }
+    records.sort_by(|a, b| {
+        a.note
+            .id()
+            .cmp(&b.note.id())
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    let mut warnings = Vec::new();
+    match vault.plans() {
+        Ok(plans) => {
+            for p in plans.into_iter().filter(|p| p.unfinished()) {
+                warnings.push(Warning {
+                    code: "recovery_available".into(),
+                    message: format!("Рабочая копия/операция {}: {:?}", p.operation_id, p.state),
+                    path: Some(format!(".zetto/recovery/{}/plan.json", p.operation_id)),
+                });
+            }
+        }
+        Err(e) => warnings.push(Warning {
+            code: "recovery_required".into(),
+            message: e.message,
+            path: Some(".zetto/recovery".into()),
+        }),
+    }
+    if records
+        .iter()
+        .filter(|r| r.id() == Some(config.root_id.as_str()) && r.stage == Stage::Published)
+        .count()
+        != 1
+    {
+        warnings.push(Warning {
+            code: "root_invalid".into(),
+            message: "Корневая заметка отсутствует, повреждена или неоднозначна".into(),
+            path: Some(".zettorc".into()),
+        });
+    }
+    let complete = records.iter().all(|r| r.readable);
+    Ok(Catalog {
+        records,
+        warnings,
+        complete,
+        freshness: Freshness::full(),
+        metrics: ScanMetrics::default(),
+    })
+}
+
 fn publish_diagnostics(
     vault: &Vault,
     records: &[Record],
@@ -854,8 +885,9 @@ fn publish_diagnostics(
             ),
         );
     }
+    let resolver = resolver::Resolver::new(records);
     for link in &record.note.links {
-        let resolution = resolver::resolve(vault, records, source, link);
+        let resolution = resolver.resolve(vault, source, link);
         if let Some(target) = resolution.target {
             connected |= records[target].stage == Stage::Published
                 && records[target].note.id() != record.note.id();

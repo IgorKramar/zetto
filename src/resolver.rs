@@ -2,6 +2,7 @@ use crate::app::Record;
 use crate::format::valid_id;
 use crate::note::{Diagnostic, Link, LinkKind, Severity};
 use crate::vault::Vault;
+use std::collections::HashMap;
 use std::path::{Component, Path};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,181 +72,184 @@ fn outcome(kind: ResolutionKind, link: &Link) -> Resolution {
     }
 }
 
-fn choose(records: &[Record], matches: Vec<usize>, link: &Link) -> Resolution {
-    if matches.len() > 1 {
-        return outcome(ResolutionKind::Ambiguous, link);
-    }
-    let Some(index) = matches.first().copied() else {
-        return outcome(ResolutionKind::Broken, link);
-    };
-    let candidate = records[index]
-        .note
-        .id()
-        .or_else(|| crate::app::filename_id(&records[index].path));
-    if candidate.is_some_and(|id| records.iter().filter(|r| r.claims_id(id)).count() > 1) {
-        return outcome(ResolutionKind::Ambiguous, link);
-    }
-    if records[index].id().is_none() {
-        return outcome(ResolutionKind::Invalid, link);
-    }
-    Resolution {
-        kind: ResolutionKind::Resolved,
-        target: Some(index),
-        diagnostic: None,
-    }
+/// Карты принадлежат одному снимку; порядок категорий совпадает с format-v1.
+pub struct Resolver<'a> {
+    records: &'a [Record],
+    claims: HashMap<String, Vec<usize>>,
+    wiki_paths: HashMap<String, Vec<usize>>,
+    paths: HashMap<String, Vec<usize>>,
+    aliases: HashMap<String, Vec<usize>>,
+    stems: HashMap<String, Vec<usize>>,
 }
 
-fn by_id(records: &[Record], id: &str, link: &Link) -> Resolution {
-    choose(
-        records,
-        records
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.claims_id(id))
-            .map(|(i, _)| i)
-            .collect(),
-        link,
-    )
-}
+impl<'a> Resolver<'a> {
+    pub fn new(records: &'a [Record]) -> Self {
+        let mut resolver = Self {
+            records,
+            claims: HashMap::new(),
+            wiki_paths: HashMap::new(),
+            paths: HashMap::new(),
+            aliases: HashMap::new(),
+            stems: HashMap::new(),
+        };
+        for (index, record) in records.iter().enumerate() {
+            for id in [record.note.id(), crate::app::filename_id(&record.path)]
+                .into_iter()
+                .flatten()
+            {
+                add(&mut resolver.claims, id, index);
+            }
+            add(&mut resolver.paths, &record.path, index);
+            add(&mut resolver.wiki_paths, &record.path, index);
+            if let Some(path) = record.path.strip_suffix(".md") {
+                add(&mut resolver.wiki_paths, path, index);
+            }
+            for alias in record.note.aliases() {
+                add(&mut resolver.aliases, &alias.trim().to_lowercase(), index);
+            }
+            if let Some(stem) = Path::new(&record.path).file_stem().and_then(|p| p.to_str()) {
+                add(&mut resolver.stems, stem, index);
+            }
+        }
+        resolver
+    }
 
-pub fn resolve(vault: &Vault, records: &[Record], source: &str, link: &Link) -> Resolution {
-    let raw = link.target.as_str();
-    if raw.is_empty() {
-        return outcome(ResolutionKind::Broken, link);
+    fn choose(&self, matches: Option<&Vec<usize>>, link: &Link) -> Resolution {
+        let matches = matches.map(Vec::as_slice).unwrap_or_default();
+        if matches.len() > 1 {
+            return outcome(ResolutionKind::Ambiguous, link);
+        }
+        let Some(index) = matches.first().copied() else {
+            return outcome(ResolutionKind::Broken, link);
+        };
+        let record = &self.records[index];
+        let candidate = record
+            .note
+            .id()
+            .or_else(|| crate::app::filename_id(&record.path));
+        if candidate
+            .and_then(|id| self.claims.get(id))
+            .is_some_and(|v| v.len() > 1)
+        {
+            return outcome(ResolutionKind::Ambiguous, link);
+        }
+        if record.id().is_none() {
+            return outcome(ResolutionKind::Invalid, link);
+        }
+        Resolution {
+            kind: ResolutionKind::Resolved,
+            target: Some(index),
+            diagnostic: None,
+        }
     }
-    if link.kind == LinkKind::Embed {
-        return outcome(ResolutionKind::Unsupported, link);
-    }
-    if let Some((scheme, _)) = raw.split_once(':').filter(|(scheme, _)| uri_scheme(scheme)) {
-        let external = ["http", "https", "ftp", "sftp", "ssh", "mailto"]
-            .contains(&scheme.to_ascii_lowercase().as_str());
-        let dangerous =
-            ["file", "javascript", "data"].contains(&scheme.to_ascii_lowercase().as_str());
-        if external || dangerous || !raw.chars().any(char::is_whitespace) {
-            return outcome(
-                if !external {
-                    ResolutionKind::Unsafe
-                } else if link.kind == LinkKind::Wiki {
-                    ResolutionKind::ExternalWiki
+
+    pub fn resolve(&self, vault: &Vault, source: &str, link: &Link) -> Resolution {
+        let raw = link.target.as_str();
+        if raw.is_empty() {
+            return outcome(ResolutionKind::Broken, link);
+        }
+        if link.kind == LinkKind::Embed {
+            return outcome(ResolutionKind::Unsupported, link);
+        }
+        if let Some((scheme, _)) = raw.split_once(':').filter(|(scheme, _)| uri_scheme(scheme)) {
+            let external = ["http", "https", "ftp", "sftp", "ssh", "mailto"]
+                .contains(&scheme.to_ascii_lowercase().as_str());
+            let dangerous =
+                ["file", "javascript", "data"].contains(&scheme.to_ascii_lowercase().as_str());
+            if external || dangerous || !raw.chars().any(char::is_whitespace) {
+                return outcome(
+                    if !external {
+                        ResolutionKind::Unsafe
+                    } else if link.kind == LinkKind::Wiki {
+                        ResolutionKind::ExternalWiki
+                    } else {
+                        ResolutionKind::External
+                    },
+                    link,
+                );
+            }
+        }
+        if raw.contains('#') {
+            return outcome(ResolutionKind::Unsupported, link);
+        }
+        if link.kind == LinkKind::Wiki {
+            if raw.chars().count() == 26 && !raw.contains(['/', '\\', '.']) {
+                return if valid_id(raw) {
+                    self.choose(self.claims.get(raw), link)
                 } else {
-                    ResolutionKind::External
+                    outcome(ResolutionKind::Invalid, link)
+                };
+            }
+            if raw.contains(['/', '\\']) && relative_path(raw).is_none() {
+                return outcome(ResolutionKind::Unsafe, link);
+            }
+            if let Some(matches) = self.wiki_paths.get(raw) {
+                return self.choose(Some(matches), link);
+            }
+            let alias = raw.trim().to_lowercase();
+            if let Some(matches) = self.aliases.get(&alias) {
+                return self.choose(Some(matches), link);
+            }
+            let stem = raw.strip_suffix(".md").unwrap_or(raw);
+            return self.choose(self.stems.get(stem), link);
+        }
+        let Some(decoded) = percent_decode(raw) else {
+            return outcome(ResolutionKind::Unsafe, link);
+        };
+        let Some(relative) = relative_path(&decoded) else {
+            return outcome(ResolutionKind::Unsafe, link);
+        };
+        let parent = Path::new(source).parent().unwrap_or_else(|| Path::new(""));
+        let joined = parent.join(relative);
+        let Some(target) = joined.to_str() else {
+            return outcome(ResolutionKind::Unsafe, link);
+        };
+        let Ok(path) = vault.path(target) else {
+            return outcome(ResolutionKind::Unsafe, link);
+        };
+        if let Some(matches) = self.paths.get(target) {
+            return self.choose(Some(matches), link);
+        }
+        if target.starts_with("assets/") {
+            return outcome(
+                if path.is_file() {
+                    ResolutionKind::Attachment
+                } else {
+                    ResolutionKind::Broken
                 },
                 link,
             );
         }
-    }
-    if raw.contains('#') {
-        return outcome(ResolutionKind::Unsupported, link);
-    }
-    if link.kind == LinkKind::Wiki {
-        if raw.chars().count() == 26 && !raw.contains(['/', '\\', '.']) {
-            return if valid_id(raw) {
-                by_id(records, raw, link)
-            } else {
-                outcome(ResolutionKind::Invalid, link)
-            };
+        let stem = Path::new(&decoded)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        if let Some(prefix) = stem.get(..26).filter(|p| valid_id(p)) {
+            let mut resolved = self.choose(self.claims.get(prefix), link);
+            if resolved.kind == ResolutionKind::Resolved {
+                let mut d = Diagnostic::new(
+                    "zetto/stale-link-path",
+                    Severity::Warning,
+                    "Имя цели устарело; ссылка разрешена по ID",
+                );
+                d.span = Some(link.span);
+                resolved.diagnostic = Some(d);
+            }
+            return resolved;
         }
-        if raw.contains(['/', '\\']) && relative_path(raw).is_none() {
-            return outcome(ResolutionKind::Unsafe, link);
-        }
-        let exact: Vec<_> = records
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.path == raw || r.path.strip_suffix(".md") == Some(raw))
-            .map(|(i, _)| i)
-            .collect();
-        if !exact.is_empty() {
-            return choose(records, exact, link);
-        }
-        let alias = raw.trim().to_lowercase();
-        let aliases: Vec<_> = records
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| {
-                r.note
-                    .aliases()
-                    .iter()
-                    .any(|a| a.trim().to_lowercase() == alias)
-            })
-            .map(|(i, _)| i)
-            .collect();
-        if !aliases.is_empty() {
-            return choose(records, aliases, link);
-        }
-        let stem = raw.strip_suffix(".md").unwrap_or(raw);
-        return choose(
-            records,
-            records
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| {
-                    Path::new(&r.path).file_stem().and_then(|p| p.to_str()) == Some(stem)
-                })
-                .map(|(i, _)| i)
-                .collect(),
-            link,
-        );
+        self.choose(self.stems.get(stem), link)
     }
-    let Some(decoded) = percent_decode(raw) else {
-        return outcome(ResolutionKind::Unsafe, link);
-    };
-    let Some(relative) = relative_path(&decoded) else {
-        return outcome(ResolutionKind::Unsafe, link);
-    };
-    let parent = Path::new(source).parent().unwrap_or_else(|| Path::new(""));
-    let joined = parent.join(relative);
-    let Some(target) = joined.to_str() else {
-        return outcome(ResolutionKind::Unsafe, link);
-    };
-    let Ok(path) = vault.path(target) else {
-        return outcome(ResolutionKind::Unsafe, link);
-    };
-    let exact: Vec<_> = records
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.path == target)
-        .map(|(i, _)| i)
-        .collect();
-    if !exact.is_empty() {
-        return choose(records, exact, link);
+}
+
+fn add(map: &mut HashMap<String, Vec<usize>>, key: &str, index: usize) {
+    let values = map.entry(key.to_owned()).or_default();
+    if values.last() != Some(&index) {
+        values.push(index);
     }
-    if target.starts_with("assets/") {
-        return outcome(
-            if path.is_file() {
-                ResolutionKind::Attachment
-            } else {
-                ResolutionKind::Broken
-            },
-            link,
-        );
-    }
-    let stem = Path::new(&decoded)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    if let Some(prefix) = stem.get(..26).filter(|p| valid_id(p)) {
-        let mut resolved = by_id(records, prefix, link);
-        if resolved.kind == ResolutionKind::Resolved {
-            let mut d = Diagnostic::new(
-                "zetto/stale-link-path",
-                Severity::Warning,
-                "Имя цели устарело; ссылка разрешена по ID",
-            );
-            d.span = Some(link.span);
-            resolved.diagnostic = Some(d);
-        }
-        return resolved;
-    }
-    choose(
-        records,
-        records
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| Path::new(&r.path).file_stem().and_then(|p| p.to_str()) == Some(stem))
-            .map(|(i, _)| i)
-            .collect(),
-        link,
-    )
+}
+
+pub fn resolve(vault: &Vault, records: &[Record], source: &str, link: &Link) -> Resolution {
+    Resolver::new(records).resolve(vault, source, link)
 }
 
 fn relative_path(raw: &str) -> Option<String> {

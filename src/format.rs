@@ -6,6 +6,37 @@ pub const MAX_NOTE_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_FRONTMATTER_BYTES: usize = 1024 * 1024;
 pub const MAX_YAML_DEPTH: usize = 64;
 
+/// Inline tag: # + Unicode letters/digits/_/- after whitespace or at text start.
+/// Markdown code/HTML and link destinations are excluded by the parser.
+pub fn inline_tags(body: &str) -> Vec<String> {
+    let mut tags = std::collections::BTreeSet::new();
+    let mut code = false;
+    for (event, range) in Parser::new(body).into_offset_iter() {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => code = true,
+            Event::End(TagEnd::CodeBlock) => code = false,
+            Event::Text(_) if !code => {
+                let text = &body[range.clone()];
+                let mut previous = body[..range.start].chars().next_back();
+                for (offset, character) in text.char_indices() {
+                    if character == '#' && previous.is_none_or(char::is_whitespace) {
+                        let tag: String = text[offset + 1..]
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '-'))
+                            .collect();
+                        if !tag.is_empty() {
+                            tags.insert(tag);
+                        }
+                    }
+                    previous = Some(character);
+                }
+            }
+            _ => {}
+        }
+    }
+    tags.into_iter().collect()
+}
+
 pub fn valid_id(id: &str) -> bool {
     id.len() == 26
         && id.as_bytes()[0] <= b'7'
