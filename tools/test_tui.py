@@ -218,6 +218,14 @@ class Pty:
         return (f"Связь:/{query}[ВВОД]·опубликованнаязаметка" in header
                 and lines[2].lstrip("│ ").startswith(">") and target in lines[2])
 
+    def wait_saved(self, identity, path):
+        wanted = "".join(f"Сохранено {identity} {path}".split())
+        def confirmed():
+            screen = self.visible()
+            return (wanted in "".join(screen.split()) and "Связь:" not in screen
+                    and "Сохранение…" not in screen)
+        self.until(confirmed, "запись подтверждена после освобождения vault-lock")
+
     def paste(self, text):
         self.send(b"\x1b[200~" + text.encode() + b"\x1b[201~")
 
@@ -313,6 +321,7 @@ def check_worker_ui(root, env):
             ui.send("\r")
         ui.until(lambda: second["id"] in (vault / draft["path"]).read_text(), "fuzzy выбрал японский title")
         assert root_id not in (vault / draft["path"]).read_text(), "выбрана устаревшая fuzzy выдача"
+        ui.wait_saved(draft["id"], draft["path"])
         # Отдельный CLI edit меняет title, затем CLI publish переносит выбранный файл.
         editor = root / "watch-editor.py"
         editor.write_text("import pathlib,sys\np=pathlib.Path(sys.argv[1])\np.write_text(p.read_text().replace('Watcher before', 'Watcher after'))\n")
@@ -424,8 +433,10 @@ def main():
             ui.wait("Связь:")
             ui.send("\r")
             ui.until(lambda: "[[" in drafts[0].read_text(), "связь сохранена")
+            ui.wait_saved(note_id, drafts[0].relative_to(vault).as_posix())
             ui.send("p")
             ui.until(lambda: any(vault.glob(note_id + "-*.md")), "публикация сохранена")
+            ui.wait_saved(note_id, next(vault.glob(note_id + "-*.md")).name)
             note = cli(vault, "show", note_id)
             assert note["stage"] == "published" and "[[" in note["body"]
             # CLI пишет при открытом UI; refresh сохраняет выбор и читает новые файлы.
