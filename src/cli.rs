@@ -1,5 +1,6 @@
-use crate::app::{App, Outcome, StageFilter};
+use crate::app::{App, LinkDirection, Outcome, SearchMode, StageFilter};
 use crate::error::{Error, Result};
+use crate::index::{Cancellation, FreshnessMode};
 use crate::safe;
 use crate::vault::RecoveryMode;
 use crate::{config, editor, format, interrupt};
@@ -32,6 +33,16 @@ enum Stage {
     Published,
     Inbox,
     All,
+}
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum Direction {
+    Incoming,
+    Outgoing,
+    Both,
+}
+#[derive(Subcommand)]
+enum IndexCommand {
+    Rebuild,
 }
 #[derive(Parser)]
 #[command(name = "zetto", version, about = "Связанная база знаний в Markdown", color = clap::ColorChoice::Never)]
@@ -91,6 +102,42 @@ enum Command {
         limit: u32,
         #[arg(long, default_value_t = 0)]
         offset: usize,
+    },
+    Search {
+        query: String,
+        #[arg(long, conflicts_with_all = ["regex", "fts"])]
+        literal: bool,
+        #[arg(long, conflicts_with = "fts")]
+        regex: bool,
+        #[arg(long)]
+        fts: bool,
+        #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u32).range(1..=10_000))]
+        limit: u32,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+    },
+    Links {
+        #[arg(value_parser = id)]
+        id: String,
+        #[arg(long, value_enum, default_value = "both")]
+        direction: Direction,
+    },
+    Graph {
+        #[arg(value_parser = id)]
+        id: String,
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=3))]
+        depth: u32,
+    },
+    Tags,
+    Path {
+        #[arg(required = true, num_args = 1.., value_parser = id)]
+        ids: Vec<String>,
+        #[arg(long)]
+        null: bool,
+    },
+    Index {
+        #[command(subcommand)]
+        command: IndexCommand,
     },
     Edit {
         #[arg(value_parser = id)]
@@ -168,21 +215,8 @@ pub fn run() -> u8 {
                     4
                 };
             }
-            return respond(
-                Err(Error::new("usage", error.to_string())),
-                selected,
-                false,
-                "not_applicable",
-            );
+            return respond(Err(Error::new("usage", error.to_string())), selected, false);
         }
-    };
-    let freshness = if matches!(
-        cli.command,
-        Some(Command::Init { .. }) | Some(Command::Tui) | None
-    ) {
-        "not_applicable"
-    } else {
-        "full"
     };
     let color = cli.format == OutputFormat::Table
         && match cli.color {
@@ -201,21 +235,30 @@ pub fn run() -> u8 {
                 4
             }
         }
-        Ok(Response::Outcome(out)) => {
-            respond(finish_interrupt(Ok(out)), cli.format, color, freshness)
-        }
-        Err(error) => respond(finish_interrupt(Err(error)), cli.format, color, freshness),
+        Ok(Response::Paths(out, null)) => match finish_interrupt(Ok(out)) {
+            Ok(out) => {
+                if write_paths(&out, null).is_ok() {
+                    0
+                } else {
+                    4
+                }
+            }
+            Err(mut error) => {
+                error.data = None;
+                respond(Err(error), cli.format, color)
+            }
+        },
+        Ok(Response::Outcome(out)) => respond(finish_interrupt(Ok(out)), cli.format, color),
+        Err(error) => respond(finish_interrupt(Err(error)), cli.format, color),
     }
 }
 
 enum Response {
     Outcome(Outcome),
     Raw(Vec<u8>),
+    Paths(Outcome, bool),
 }
 fn execute(cli: &Cli, color: bool) -> Result<Response> {
-    if cli.cached {
-        return Err(Error::new("usage", "--cached недоступен в v0.1"));
-    }
     let tty = io::stdin().is_terminal() && io::stdout().is_terminal();
     let command = match cli.command.as_ref() {
         Some(command) => command,
@@ -227,6 +270,13 @@ fn execute(cli: &Cli, color: bool) -> Result<Response> {
             ));
         }
     };
+    let freshness = if cli.cached {
+        FreshnessMode::Cached
+    } else if cli.fresh {
+        FreshnessMode::Full
+    } else {
+        FreshnessMode::Stat
+    };
     let interactive = tty && !cli.no_interactive && cli.format == OutputFormat::Table;
     if matches!(command, Command::Tui) {
         if !interactive {
@@ -236,7 +286,7 @@ fn execute(cli: &Cli, color: bool) -> Result<Response> {
             ));
         }
         let path = config::discover(cli.vault.as_deref())?;
-        crate::tui::run(App::open(&path)?, color)?;
+        crate::tui::run(App::open(&path)?.with_freshness(freshness), color)?;
         return Ok(Response::Raw(Vec::new()));
     }
     if matches!(command, Command::Edit { .. }) && (!tty || cli.no_interactive) {
@@ -247,6 +297,9 @@ fn execute(cli: &Cli, color: bool) -> Result<Response> {
     }
     if matches!(command, Command::Show { raw: true, .. }) && cli.format != OutputFormat::Table {
         return Err(Error::new("usage", "--raw несовместим с JSON/JSONL"));
+    }
+    if matches!(command, Command::Path { null: true, .. }) && cli.format != OutputFormat::Table {
+        return Err(Error::new("usage", "--null несовместим с JSON/JSONL"));
     }
     if let Command::Init { path, root_title } = command {
         if path.is_some() && cli.vault.is_some() {
@@ -267,6 +320,7 @@ fn execute(cli: &Cli, color: bool) -> Result<Response> {
         let draft = app.capture(&input.title, body.as_deref().unwrap_or(""))?;
         let id = draft.data["id"].as_str().unwrap();
         let mut recovery = Vec::new();
+        let mut warnings = draft.warnings.clone();
         let operation = (|| {
             check_interrupt()?;
             if body.is_none() {
@@ -274,6 +328,7 @@ fn execute(cli: &Cli, color: bool) -> Result<Response> {
                 let edited = app.edit(id, &editor::command()?)?;
                 recovery.extend(edited.recovery.clone());
                 check_interrupt_with(&edited)?;
+                warnings.extend(edited.warnings.clone());
             }
             if let Command::New { link, .. } = command {
                 let chosen = if body.is_none() && link.is_none() {
@@ -286,12 +341,15 @@ fn execute(cli: &Cli, color: bool) -> Result<Response> {
                 check_interrupt()?;
                 app.publish(id, chosen.as_deref())
             } else {
-                Ok(draft.clone())
+                let mut out = draft.clone();
+                out.warnings.clear(); // Предупреждения этапов объединяются ниже один раз.
+                Ok(out)
             }
         })();
         return operation
             .map(|mut out| {
                 out.recovery.extend(recovery.clone());
+                out.warnings.extend(warnings.clone());
                 Response::Outcome(out)
             })
             .map_err(|mut e| {
@@ -300,6 +358,7 @@ fn execute(cli: &Cli, color: bool) -> Result<Response> {
                     e.data = Some(Box::new(draft.data));
                 }
                 e.recovery.extend(recovery);
+                e.context.warnings.extend(warnings);
                 e
             });
     }
@@ -320,7 +379,8 @@ fn execute(cli: &Cli, color: bool) -> Result<Response> {
         };
         return App::doctor_at(&path, operation.as_deref(), mode).map(Response::Outcome);
     }
-    let app = App::open(&path)?;
+    let app = App::open(&path)?.with_freshness(freshness);
+    let token = Cancellation::default();
     let outcome = match command {
         Command::Show { id, raw: true } => return app.raw(id).map(Response::Raw),
         Command::Show { id, .. } => app.show(id),
@@ -339,6 +399,50 @@ fn execute(cli: &Cli, color: bool) -> Result<Response> {
             *limit as usize,
             *offset,
         ),
+        Command::Search {
+            query,
+            literal,
+            regex,
+            fts,
+            limit,
+            offset,
+        } => app.search(
+            query,
+            if *literal {
+                SearchMode::Literal
+            } else if *regex {
+                SearchMode::Regex
+            } else if *fts {
+                SearchMode::Fts
+            } else {
+                SearchMode::Default
+            },
+            *limit as usize,
+            *offset,
+            &token,
+        ),
+        Command::Links { id, direction } => app.links(
+            id,
+            match direction {
+                Direction::Incoming => LinkDirection::Incoming,
+                Direction::Outgoing => LinkDirection::Outgoing,
+                Direction::Both => LinkDirection::Both,
+            },
+            &token,
+        ),
+        Command::Graph { id, depth } => app.graph(id, *depth as usize, &token),
+        Command::Tags => app.tags(&token),
+        Command::Path { ids, null } => {
+            let out = app.paths(ids, &token)?;
+            return Ok(if cli.format == OutputFormat::Table {
+                Response::Paths(out, *null)
+            } else {
+                Response::Outcome(out)
+            });
+        }
+        Command::Index {
+            command: IndexCommand::Rebuild,
+        } => app.rebuild_index(&token),
         Command::Edit { id } => app.edit(id, &editor::command()?),
         Command::Link {
             source,
@@ -450,18 +554,21 @@ fn finish_interrupt(result: Result<Outcome>) -> Result<Outcome> {
             error.data = Some(Box::new(out.data));
             error.recovery = out.recovery;
             error.diagnostics = out.diagnostics;
+            error.context.warnings = out.warnings;
+            error.context.freshness = out.freshness;
         }
         Err(previous) => {
             error.saved = previous.saved;
             error.data = previous.data;
             error.recovery = previous.recovery;
             error.diagnostics = previous.diagnostics;
+            error.context = previous.context;
         }
     }
     Err(error)
 }
 
-fn respond(result: Result<Outcome>, format: OutputFormat, color: bool, freshness: &str) -> u8 {
+fn respond(result: Result<Outcome>, format: OutputFormat, color: bool) -> u8 {
     let (out, error, exit) = match result {
         Ok(out) => (out, Value::Null, 0),
         Err(error) => {
@@ -470,6 +577,8 @@ fn respond(result: Result<Outcome>, format: OutputFormat, color: bool, freshness
             out.saved = error.saved;
             out.diagnostics = error.diagnostics;
             out.recovery = error.recovery;
+            out.warnings = error.context.warnings;
+            out.freshness = error.context.freshness;
             (
                 out,
                 json!({"code":error.code,"message":error.message}),
@@ -480,7 +589,7 @@ fn respond(result: Result<Outcome>, format: OutputFormat, color: bool, freshness
     let envelope = json!({
         "schema_version":1,"status":out.status,"saved":out.saved,"data":out.data,"error":error,
         "warnings":out.warnings,"diagnostics":out.diagnostics,"recovery":out.recovery,
-        "freshness":{"mode":freshness,"generation":null},"complete":out.complete,"truncated":out.truncated,
+        "freshness":out.freshness,"complete":out.complete,"truncated":out.truncated,
     });
     let written = match format {
         OutputFormat::Json => write_stdout(format!("{envelope}\n").as_bytes()),
@@ -494,6 +603,18 @@ fn write_stdout(bytes: &[u8]) -> io::Result<()> {
     out.write_all(bytes)?;
     out.flush()
 }
+fn write_paths(outcome: &Outcome, null: bool) -> io::Result<()> {
+    human_notices(
+        &json!({"warnings":outcome.warnings,"diagnostics":outcome.diagnostics,"recovery":outcome.recovery,"freshness":outcome.freshness}),
+    )?;
+    let mut out = io::stdout().lock();
+    for item in outcome.data["items"].as_array().unwrap() {
+        out.write_all(item["path"].as_str().unwrap().as_bytes())?;
+        out.write_all(if null { b"\0" } else { b"\n" })?;
+    }
+    out.flush()
+}
+
 fn write_jsonl(envelope: &Value) -> io::Result<()> {
     let mut out = io::stdout().lock();
     let mut count = 0;
@@ -547,24 +668,46 @@ fn human(envelope: &Value, color: bool) -> io::Result<()> {
     if !data.is_null() {
         let mut out = io::stdout().lock();
         if let Some(items) = data.get("items").and_then(Value::as_array) {
-            if color {
-                write!(out, "\x1b[1m")?;
+            if let Some(first) = items.first() {
+                let header = if first.get("tag").is_some() {
+                    "ТЕГ\tЗАМЕТОК"
+                } else if first.get("source_id").is_some() {
+                    "ИСТОЧНИК\tЦЕЛЬ\tРАЗРЕШЕНА\tПРИЧИНА"
+                } else {
+                    "ID\tСТАДИЯ\tЗАГОЛОВОК\tПУТЬ"
+                };
+                if color {
+                    write!(out, "\x1b[1m")?;
+                }
+                writeln!(out, "{header}")?;
+                if color {
+                    write!(out, "\x1b[0m")?;
+                }
+                for item in items {
+                    if first.get("tag").is_some() {
+                        writeln!(out, "{}\t{}", field(item, "tag"), item["count"])?;
+                    } else if first.get("source_id").is_some() {
+                        writeln!(
+                            out,
+                            "{}\t{}\t{}\t{}",
+                            field(item, "source_id"),
+                            field(item, "target"),
+                            field(item, "resolved_id"),
+                            field(item, "reason")
+                        )?;
+                    } else {
+                        writeln!(
+                            out,
+                            "{}\t{}\t{}\t{}",
+                            field(item, "id"),
+                            field(item, "stage"),
+                            field(item, "title"),
+                            field(item, "path")
+                        )?;
+                    }
+                }
             }
-            writeln!(out, "ID\tСТАДИЯ\tЗАГОЛОВОК\tПУТЬ")?;
-            if color {
-                write!(out, "\x1b[0m")?;
-            }
-            for item in items {
-                writeln!(
-                    out,
-                    "{}\t{}\t{}\t{}",
-                    field(item, "id"),
-                    field(item, "stage"),
-                    field(item, "title"),
-                    field(item, "path")
-                )?;
-            }
-        } else if data.get("id").is_some() {
+        } else if data.get("id").is_some() && data.get("nodes").is_none() {
             writeln!(out, "{}  {}", field(data, "id"), field(data, "path"))?;
             if let Some(title) = data.get("title").and_then(Value::as_str) {
                 writeln!(out, "{}", safe(title))?;
@@ -581,7 +724,18 @@ fn human(envelope: &Value, color: bool) -> io::Result<()> {
         }
         out.flush()?;
     }
+    human_notices(envelope)
+}
+
+fn human_notices(envelope: &Value) -> io::Result<()> {
     let mut stderr = io::stderr().lock();
+    if envelope["freshness"]["mode"] == "cached" {
+        writeln!(
+            stderr,
+            "cached · generation {} · без сверки файлов",
+            envelope["freshness"]["generation"]
+        )?;
+    }
     for kind in ["warnings", "diagnostics"] {
         for item in envelope[kind].as_array().unwrap() {
             writeln!(
