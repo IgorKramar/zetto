@@ -28,6 +28,9 @@ pub enum LinkDirection {
 }
 
 impl App {
+    pub(crate) fn freshness_mode(&self) -> FreshnessMode {
+        self.freshness_mode
+    }
     pub fn with_freshness(mut self, mode: FreshnessMode) -> Self {
         self.freshness_mode = mode;
         self

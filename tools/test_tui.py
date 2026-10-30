@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Реальные PTY-проверки v0.1. Запуск: python3 tools/test_tui.py [binary]."""
+"""Реальные PTY-проверки v0.1/v0.2. Запуск: python3 tools/test_tui.py [binary]."""
 import errno
 import faulthandler
 import fcntl
@@ -199,7 +199,10 @@ class Pty:
                 if unicodedata.combining(token):
                     continue
                 cells[row, column] = token
-                column += 2 if unicodedata.east_asian_width(token) in "WF" else 1
+                width = 2 if unicodedata.east_asian_width(token) in "WF" else 1
+                if width == 2:
+                    cells[row, column + 1] = ""  # Wide glyph заменяет обе прежние ячейки.
+                column += width
         return "\n".join("".join(cells.get((r, c), " ") for c in range(180)) for r in range(60))
 
     def wait(self, marker):
@@ -226,6 +229,118 @@ class Pty:
             os.close(self.slave)
 
 
+def check_worker_ui(root, env):
+    vault = root / "worker-vault"
+    root_id = cli(vault, "init")["id"]
+    first = cli(vault, "capture", "firsttoken full text", "--title", "Первый результат")
+    second = cli(vault, "capture", "secondtoken full text", "--title", "日本語 заметка")
+    for note in (first, second):
+        cli(vault, "publish", note["id"], "--link", root_id)
+    ui = Pty(vault, env)
+    try:
+        ui.send("/")
+        ui.paste("firsttoken")
+        ui.wait("firsttoken full text")
+        # Быстрая замена создаёт несколько поколений запроса: принимает только последнее.
+        ui.send(b"\x7f" * len("firsttoken"))
+        ui.paste("secondtoken")
+        ui.wait("secondtoken full text")
+        assert "Первый результат" not in ui.visible(), ui.visible()
+        ui.send("jknp")
+        ui.wait("Нет совпадений")
+        ui.send(b"\x1b")
+        ui.until(lambda: "[ВВОД]" not in ui.visible(), "Esc закрыл поиск")
+        # Навигация/resize работают одновременно с запросом фоновой full-сверки.
+        ui.send("rj")
+        ui.wait("> Первый результат")
+        ui.resize(90, 26)
+        ui.wait("> Первый результат")
+        ui.wait(first["id"])
+        ui.send("i")
+        draft = cli(vault, "capture", "external worker body", "--title", "Watcher before")
+        ui.wait("Watcher before")  # Без ручного r.
+        ui.wait(draft["id"])
+        ui.send("l")
+        ui.wait("Связь:")
+        ui.send("/")
+        ui.paste("日本語")
+        ui.send("\r")  # Enter при pending не выбирает старый первый элемент.
+        ui.until(lambda: "[[" in (vault / draft["path"]).read_text() or ("日本語" in "".join(ui.visible().split()) and "Поиск…" not in ui.visible()), "актуальный Unicode fuzzy")
+        if "[[" not in (vault / draft["path"]).read_text():
+            ui.send("\r")
+        ui.until(lambda: second["id"] in (vault / draft["path"]).read_text(), "fuzzy выбрал японский title")
+        assert root_id not in (vault / draft["path"]).read_text(), "выбрана устаревшая fuzzy выдача"
+        # Отдельный CLI edit меняет title, затем CLI publish переносит выбранный файл.
+        editor = root / "watch-editor.py"
+        editor.write_text("import pathlib,sys\np=pathlib.Path(sys.argv[1])\np.write_text(p.read_text().replace('Watcher before', 'Watcher after'))\n")
+        edit_env = dict(env, VISUAL=f"{sys.executable} {editor}", EDITOR=f"{sys.executable} {editor}")
+        master, slave = pty.openpty()
+        process = None
+        try:
+            process = subprocess.Popen([BINARY, "--vault", str(vault), "--format", "json", "edit", draft["id"]], stdin=slave, stdout=slave, stderr=subprocess.PIPE, env=edit_env)
+            _, stderr = process.communicate(timeout=7)
+            response = b"".join(drain_pty(master))
+            assert process.returncode == 0, (response, stderr)
+            assert json.loads(response)["saved"] is True
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate()
+            os.close(master)
+            os.close(slave)
+        ui.wait("Watcher after")
+        published = cli(vault, "publish", draft["id"])
+        ui.wait("Нет заметок")
+        ui.send("i/")
+        ui.paste("Watcher after")
+        ui.wait("Watcher after")
+        ui.wait(draft["id"])
+        ui.wait(published["path"])
+        assert "inbox/" not in ui.visible().splitlines()[4], "внешний rename оставил старый preview path"
+        ui.send(b"\x1b")
+        ui.until(lambda: "[ВВОД]" not in ui.visible(), "Esc вернул библиотеку")
+        ui.send("r")
+        ui.wait("Файлы сверены")
+        # Больше периода reconciliation: неизменные данные не очищают preview и не рисуют кадры.
+        ui.drain(0.1)
+        idle_until = time.monotonic() + 5.7
+        while time.monotonic() < idle_until:
+            assert ui.process.poll() is None
+            assert not select.select([ui.master], [], [], 0.1)[0], "idle reconciliation перерисовывает неизменный экран"
+        ui.send("q")
+        ui.finish(0)
+    except BaseException:
+        ui.abort()
+        raise
+
+
+def check_editor_worker_owns_tty(root, env):
+    vault = root / "editor-worker-vault"
+    cli(vault, "init")
+    started = root / "editor-started"
+    editor = root / "waiting-editor.py"
+    editor.write_text("import pathlib,sys\np=pathlib.Path(sys.argv[1])\npathlib.Path(" + repr(str(started)) + ").write_text('ready')\nline=sys.stdin.readline()\np.write_text(p.read_text() + '\\n' + line)\nprint('EDITOR_INPUT_OK', flush=True)\n")
+    edit_env = dict(env, VISUAL=f"{sys.executable} {editor}", EDITOR=f"{sys.executable} {editor}")
+    ui = Pty(vault, edit_env)
+    try:
+        ui.send("e")
+        ui.until(started.exists, "редактор получил TTY")
+        ui.drain(0.1)
+        before = len(ui.output)
+        cli(vault, "capture", "CLI while editor waits", "--title", "Concurrent editor")
+        ui.drain(0.3)
+        assert len(ui.output) == before, "watcher перерисовал TUI поверх редактора"
+        ui.send("EDITOR_STDIN_UNTOUCHED\n")
+        ui.wait("EDITOR_STDIN_UNTOUCHED")
+        ui.until(lambda: b"EDITOR_INPUT_OK" in ui.output, "stdin прочитан редактором")
+        ui.wait("Сохранено")
+        ui.send("q")
+        ui.finish(0)
+    except BaseException:
+        ui.abort()
+        raise
+
+
 def main():
     check_drain_eof()
     check_pty_exit()
@@ -238,6 +353,8 @@ def main():
         editor.chmod(0o700)
         env = dict(os.environ, EDITOR=str(editor), VISUAL=str(editor), XDG_CONFIG_HOME=str(root / "config"), TERM="xterm-256color", NO_COLOR="1")
         check_cli_editor(root, env)
+        check_worker_ui(root, env)
+        check_editor_worker_owns_tty(root, env)
         ui = Pty(vault, env)
         try:
             ui.send("c")

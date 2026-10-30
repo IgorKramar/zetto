@@ -28,3 +28,4 @@ unicode-segmentation = "1.12"
 rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "hooks"] }
 regex = "1.12"
 nucleo-matcher = "=0.3.1"
+notify = "=8.2.0"
