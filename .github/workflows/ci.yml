@@ -48,3 +48,6 @@ jobs:
       - name: Терминальный сценарий
         timeout-minutes: 2
         run: python3 tools/test_tui.py
+      - name: Внешние изменения и параллельные процессы
+        timeout-minutes: 2
+        run: python3 tools/test_external.py

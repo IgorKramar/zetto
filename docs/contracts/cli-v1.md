@@ -1,6 +1,6 @@
 # CLI и машинный контракт v1
 
-Автор: Igor Kramar. 2026-10-29. **Принято Igor Kramar; команды v0.1 реализованы.**
+Автор: Igor Kramar. 2026-10-30. **Принято Igor Kramar; команды v0.1–0.2 реализованы.**
 Основание: ADR-0005–0008 и [format-v1](../format-v1.md).
 Команда появляется вместе со своим JSON-ответом. Версия строки вывода
 не зависит от версии SQLite или Cargo package.
@@ -26,7 +26,7 @@
 | `--format table\|json\|jsonl` | По умолчанию table; JSON/JSONL не содержат ANSI. `tui` несовместим с машинным выводом. |
 | `--no-interactive` | Вопрос вместо обязательного аргумента становится ошибкой `interaction_required`. |
 | `--color auto\|always\|never` | По умолчанию auto; без TTY/при `NO_COLOR` цвета выключены; явный always сильнее `NO_COLOR`. Машинные форматы всегда без цвета. |
-| `--fresh`, `--cached` | Взаимоисключающие. С v0.2: full content check либо без сверки. Без флага — stat-сверка. В v0.1 полный разбор, cached недоступен (exit 2), свежесть `full`. |
+| `--fresh`, `--cached` | Взаимоисключающие. Для запросов v0.2: full content check либо без сверки. Без флага — stat-сверка. Запись проверяет исходные файлы независимо от кэша; её freshness — not_applicable. |
 
 Неизвестные команды/параметры — exit 2, без изменений. ID-аргументы — полные
 ULID, никаких сокращений или неявного выбора alias. Пути — отдельные argv.
@@ -100,6 +100,14 @@ Exit `1`. `status`: `ok`, `draft_saved`, `error`. `saved` означает, чт
 при ошибке обработки части vault/усечении false. `freshness.mode`:
 `full`, `stat`, `cached`, `not_applicable`; generation nullable до SQLite.
 Freshness описывает наблюдение, не обещает атомарный snapshot внешнего диска.
+После записи dirty marker оставляет прежнее cached-поколение согласованным
+до следующей сверки. Cached show получает тело из того же поколения, что
+метаданные; cached FTS и graph/links также используют один read snapshot.
+Literal/regex читают текущие байты по индексированному списку путей; с cached
+это явно отмечено warning `live_content`. Предел запроса — 64 KiB,
+literal/regex — 15 секунд; ранняя отмена возвращает interrupted.
+В graph действуют пределы 10 000 узлов и 20 000 рёбер с truncated.
+Имена файлов и корень vault должны быть UTF-8; неподдержанный корень даёт invalid_config.
 Диапазоны — по format-v1. JSON-paths относительны vault с `/`, кроме
 команды path и внешних входов/выходов import/export; encoding — UTF-8.
 

@@ -4,10 +4,15 @@
 import argparse
 import hashlib
 import json
+import statistics
 from pathlib import Path
 import tempfile
 
 ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+PERFORMANCE_PARAGRAPH = (
+    "Наблюдение связывает понятия и сохраняет контекст. "
+    "Observation connects ideas, evidence and reasoning. café 東京.\n"
+)
 
 
 def note_id(number):
@@ -15,12 +20,28 @@ def note_id(number):
     return "".join(ALPHABET[(value >> shift) & 31] for shift in range(125, -1, -5))
 
 
-def generate(destination, profile):
+def performance_targets(number, count):
+    return [] if number == 0 else [note_id((number - step) % count)
+                                  for step in range(1, 4 + number % 8)]
+
+
+def performance_body(body, targets, size):
+    links = "".join(f"\n[[{target}]]\n" for target in targets)
+    remaining = size - len((body + links).encode())
+    line_bytes = len(PERFORMANCE_PARAGRAPH.encode())
+    repeats = max(0, (remaining + line_bytes - 1) // line_bytes)
+    return body + PERFORMANCE_PARAGRAPH * repeats + links
+
+
+def generate(destination, profile, performance=False):
+    if performance and profile not in ("5000", "50000"):
+        raise ValueError("Профиль производительности требует 5000 или 50000 заметок")
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "inbox").mkdir()
     (destination / "assets").mkdir()
     count = {"small": 8, "invalid": 9, "5000": 5000, "50000": 50000}[profile]
     records = []
+    body_sizes = []
     for number in range(count):
         identity = note_id(number)
         title = "Корень" if number == 0 else f"Заметка {number}"
@@ -77,7 +98,14 @@ def generate(destination, profile):
             else:
                 body += "\n<<<<<<< HEAD\nA\n=======\nB\n>>>>>>> branch\n"
                 diagnostics = ["zetto/merge-conflict"]
-        body += "".join(f"\n[[{target}]]\n" for target in targets)
+        if performance:
+            header += f'tags: [knowledge, benchmark]\naliases: ["Тема {number}"]\n'
+            targets = performance_targets(number, count)
+            size = 262144 if count == 50000 and number >= count - 3 else 4096
+            body = performance_body(body, targets, size)
+            body_sizes.append(len(body.encode()))
+        else:
+            body += "".join(f"\n[[{target}]]\n" for target in targets)
         content = f"---\n{header}---\n{body}".encode()
         (destination / path).write_bytes(content)
         records.append({"path": path, "sha256": hashlib.sha256(content).hexdigest(),
@@ -86,6 +114,9 @@ def generate(destination, profile):
     (destination / ".zettorc").write_text(config, encoding="utf-8")
     manifest = {"generator_version": 1, "profile": profile, "notes": count,
                 "resolved_edges": sum(len(r["edges"]) for r in records), "files": records}
+    if performance:
+        manifest.update(generator_version=2, workload="4k-3to10links",
+                        median_body_bytes=statistics.median(body_sizes))
     (destination / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return manifest
@@ -107,6 +138,14 @@ def check(destination):
 
 
 def self_check():
+    assert performance_targets(0, 5000) == []
+    for number in range(1, 11):
+        targets = performance_targets(number, 5000)
+        assert len(targets) == len(set(targets)) == 3 + number % 8
+        assert note_id(number) not in targets
+    body = performance_body("Тело\n", [note_id(1)], 4096)
+    assert 4096 <= len(body.encode()) < 4096 + len(PERFORMANCE_PARAGRAPH.encode())
+    assert body.endswith(f"\n[[{note_id(1)}]]\n")
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "vault"
         generated = generate(path, "small")
@@ -140,14 +179,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", nargs="?", type=Path)
     parser.add_argument("--profile", choices=["small", "invalid", "5000", "50000"], default="small")
+    parser.add_argument("--performance", action="store_true",
+                        help="Тела около 4 KiB, 3–10 связей, теги/aliases; 50k включает крупные файлы")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--self-check", action="store_true")
     args = parser.parse_args()
+    if args.performance and args.profile not in ("5000", "50000"):
+        parser.error("--performance требует --profile 5000 или 50000")
     if args.self_check:
         self_check()
         print("Самопроверка: OK")
     elif args.destination is None:
         parser.error("нужен новый каталог назначения")
     else:
-        result = check(args.destination) if args.check else generate(args.destination, args.profile)
+        result = check(args.destination) if args.check else generate(args.destination, args.profile, args.performance)
         print(f'{result["profile"]}: {result["notes"]} заметок, {result["resolved_edges"]} рёбер')

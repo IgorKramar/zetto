@@ -17,11 +17,12 @@ rg/fzf — необязательные внешние инструменты. �
 не требует связи, публикация требует связи на другую опубликованную заметку
 с одним явным root-исключением.
 
-**Текущее состояние:** реализован минимальный цикл v0.1.0-dev: CLI/JSON,
-TUI, общее ядро операций, безопасная запись и файловое восстановление.
+**Текущее состояние:** реализован v0.2.0-dev: CLI/JSON, SQLite/FTS5,
+stat/full/cached, поиск, граф и фоновый TUI с notify.
+Безопасная запись и файловое восстановление действуют с v0.1.
 Контракты этапа 0 приняты владельцем 2026-10-29; приёмка приложения
 отделена от реализации и публикации релиза.
-[План v0.1](docs/plans/2026-10-29-v0.1-minimal-note-cycle.md).
+[План v0.2](docs/plans/2026-10-30-v0.2-search-index-concurrency.md).
 
 Проект переименован из `zk` в `zetto` в [ADR-0001](./docs/architecture/decisions/0001-project-name-and-ecosystem-positioning.md) (2026-05-09).
 
@@ -36,8 +37,8 @@ TUI, общее ядро операций, безопасная запись и 
 | Capture | Подтверждённое сохранение без необходимости немедленно выбрать связь | Машинное время отдельно от пользовательского сценария <5 сек |
 | Publish | Проверки структуры и связности перед переносом | Время системы отдельно от выбора связи |
 | Сохранность | Backup/recovery до замены, no-clobber при создании, обнаруженные конфликты сохраняются | Реальная ФС и аварийные сценарии v0.1; [ADR-0006](docs/architecture/decisions/0006-safe-writes-and-recovery.md) |
-| Свежесть | Явные full/stat/cached; индекс производный | v0.2: равенство full/incremental графа |
-| Ресурсы и масштаб | Снятые startup/search/capture/idle CPU/RAM на фиксированных корпусах 5k/50k | Корпуса подготовлены, производительность приложения пока не измерена |
+| Свежесть | Явные full/stat/cached; индекс производный | Равенство full/incremental, alias/rename/delete, смена git-ветки, busy и cached snapshots |
+| Ресурсы и масштаб | Startup/search/capture/idle CPU/RAM на фиксированных корпусах 5k/50k | Корпус v2: около 4 KiB, 3–10 связей; инструменты tools/benchmark_cli.py и tools/corpus.py |
 | Поддерживаемая среда | Linux/macOS, локальная ФС, один автор и несколько процессов | Платформенная/PTY матрица до 1.0 |
 
 ### 2.1 Системные бюджеты
@@ -60,7 +61,19 @@ Capture не ждёт полной сверки графа. Обход/stat из
 `cli`/`tui` вызывают `app`; операции используют `note`/`format`, `vault`,
 `editor` и `config`. `app` не зависит от stdout, клавиатуры или terminal UI.
 `vault` отвечает за пути, блокировки, backup и recovery; `format` не знает ФС.
-В v0.1 каталог заметок производный, в памяти; индекс SQLite относится к v0.2.
+В v0.2 `index` хранит производный SQLite/FTS5 в приватном XDG cache по хешу
+канонического пути vault. File key отделён от ULID; generation публикует
+files/links/tags/aliases/diagnostics/FTS одной транзакцией. Обход выполняется
+вне write transaction, при commit проверяются generation и revision.
+WAL/busy timeout координируют процессы; rebuild не удаляет занятую БД.
+
+Каталог содержит метаданные без тел. `resolver` строит карты ID/path/alias/stem;
+полный файловый `App.scan` остаётся эталоном и путём проверок записи без SQLite.
+После durable write ставится dirty marker; отказ индекса возвращается warning,
+не отменяет подтверждённый файл. `tui::worker` выполняет чтение, индекс и
+операции через очереди по 8 элементов; четыре read lanes имеют отмену и IDs.
+Принятые записи не отменяются. Notify + debounce 150 ms и полный проход раз
+в минуту страхуют внешние изменения; `r` явно выполняет full.
 
 `tools/format-probe` — отдельный проверочный пакет этапа 0, не пакет приложения.
 Он переиспользует production parser и проверяет YAML-корпус; публичного Rust SDK нет.
@@ -114,7 +127,7 @@ ADR-0005–0008 имеют приоритет над перечисленным�
 
 - ~~**Q1. Схема ID заметок.**~~ — закрыт [ADR-0002](./docs/architecture/decisions/0002-note-id-scheme-and-filename-layout.md): ULID во frontmatter + `<ULID>-<slug>.md` filename.
 - ~~**Q2. Синтаксис ссылок.**~~ — закрыт [ADR-0003](./docs/architecture/decisions/0003-link-representation.md): wikilink-primary `[[ULID]]` / `[[ULID|display]]` + canonical markdown read-compat; embeds/anchors/block-refs deferred to v2.
-- **Q3. Производный индекс v0.2.** В v0.1 работает обход в памяти; принятый план вводит SQLite/FTS5 в v0.2. Схема, инкрементальная сверка и протокол свежести ещё не реализованы.
+- ~~**Q3. Производный индекс v0.2.**~~ — реализован по [ADR-0009](docs/architecture/decisions/0009-publish-derived-index-generations.md); дальнейшие оптимизации определяются замерами, без смены источника истины.
 - ~~**Q4. Граница TUI vs CLI-pipe.**~~ — закрыт [ADR-0007](docs/architecture/decisions/0007-shared-cli-tui-core.md): общее ядро, независимые адаптеры и машинный контракт с первой команды.
 - ~~**Q5. Степень принуждения constraints.**~~ — закрыт [ADR-0008](docs/architecture/decisions/0008-capture-publish-and-root.md): capture без связи; строгость при publish, видимое root-исключение.
 

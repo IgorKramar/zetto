@@ -54,19 +54,19 @@
 
 **B1. Graph index strategy** *(reframed `/archforge:observe` 2026-05-09; находка O-4 — добавлена третья ось)*
 - *Forces*: три варианта вместо двух — (a) **in-memory rebuild** при каждом запуске (zero state, dependency-free, но cold-start ∝ N заметок); (b) **persistent index** (sqlite/sled/JSON sidecar — быстро, но invalidation, sync, миграции схемы); (c) **event-sourced**: append-only журнал FS-событий (`note_created`, `link_added`, `note_renamed`, ...) + материализованная SQLite-проекция; cold start = replay snapshot, никогда не full rebuild. Прецеденты: postmortem Org-roam (SQLite быстра, узким местом было преобразование данных, не сам индекс), Foam #347 (full-rebuild + Electron = 65–75% CPU на 330 заметках), системы интервального повторения.
-- *Status*: open
+- *Status*: **decided** — SQLite/FTS5, generation/revision и сверка по [ADR-0009](decisions/0009-publish-derived-index-generations.md), реализованы в v0.2.
 - *Blocks*: B3, D1, частично C4 (бюджет capture latency)
 - *Blocked by*: A1, A2, A4 (что индексируется и как из этого собирается граф)
 
 **B2. Markdown parser/AST**
 - *Forces*: pulldown-cmark (de-facto стандарт в Rust, fast, CommonMark) vs markdown-rs (более фичевый) vs собственный минимальный парсер (только то, что нужно для extracting links + frontmatter).
-- *Status*: open (имплицитно)
+- *Status*: **decided** — production parser на pulldown-cmark, [ADR-0005](decisions/0005-format-layout-and-resolution.md) и format-v1; работает с v0.1.
 - *Blocks*: B1
 - *Blocked by*: A2 (link syntax определяет, что вообще надо парсить)
 
 **B3. FS-watcher strategy**
 - *Forces*: notify-rs (cross-platform inotify/FSEvents) для live updates vs lazy on-demand check (стат файлов при запуске) vs hybrid. Имеет смысл только если есть persistent index B1.
-- *Status*: open (имплицитно, и условно)
+- *Status*: **decided** — notify как сигнал, полный проход после потери и периодическая сверка; [ADR-0009](decisions/0009-publish-derived-index-generations.md), v0.2.
 - *Blocks*: TUI live-update в C-группе
 - *Blocked by*: B1
 
@@ -96,7 +96,7 @@
 
 **C3. TUI library choice**
 - *Forces*: ratatui (most active in Rust 2024–2026 ecosystem) vs cursive vs raw crossterm. Влияет на сложность layout, perf, биндинги.
-- *Status*: open (имплицитно)
+- *Status*: **decided** — ratatui/crossterm, используются с v0.1 в общем package по [ADR-0007](decisions/0007-shared-cli-tui-core.md).
 - *Blocks*: C4 implementation
 - *Blocked by*: C1 (scope TUI определяет, какие фичи нужны от библиотеки)
 - *Reversibility*: средняя — миграция между TUI-библиотеками ≈ переписывание UI-слоя.
@@ -120,7 +120,7 @@
 
 **D1. Search backend**
 - *Forces*: делегировать ripgrep (быстро, zero implementation, отвечает Track «Toolchain interop») vs использовать собственный B1-индекс (быстрее на типовых запросах, но дублирует ripgrep) vs hybrid (полнотекст → rg, метаданные → index).
-- *Status*: open (имплицитно)
+- *Status*: **decided** — встроенный SQLite/FTS5, отдельные literal/regex и fuzzy title/alias; [ADR-0009](decisions/0009-publish-derived-index-generations.md), v0.2.
 - *Blocks*: —
 - *Blocked by*: B1, A1
 
@@ -171,7 +171,7 @@ A1–A5, C1, C2b и C4 больше не являются очередью от�
 
 ## Cross-cutting (через несколько групп)
 
-- **Latency budget allocation** — машинное время capture/publish измеряется отдельно от времени пользователя по ADR-0008. Системные бюджеты и отсутствие измерений приложения указаны в [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §2; обход/stat учитывается отдельно.
+- **Latency budget allocation** — машинное время capture/publish измеряется отдельно от времени пользователя по ADR-0008. Системные бюджеты — в [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §2; tools/benchmark_cli.py отдельно записывает обход/stat и end-to-end время на зафиксированном корпусе.
 
 ---
 
