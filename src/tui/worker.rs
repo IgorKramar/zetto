@@ -194,9 +194,7 @@ impl Worker {
     }
     pub fn read(&mut self, read: Read) -> u64 {
         let lane = read.lane().index();
-        if let Some(token) = self.tokens[lane].take() {
-            token.cancel();
-        }
+        self.cancel(read.lane());
         let token = Cancellation::default();
         let id = self.id();
         self.latest[lane] = id;
@@ -214,8 +212,7 @@ impl Worker {
             if let Some(request) = slot.take() {
                 match self.tx.as_ref().unwrap().try_send(request) {
                     Ok(()) => {}
-                    Err(TrySendError::Full(request)) => *slot = Some(request),
-                    Err(TrySendError::Disconnected(request)) => {
+                    Err(TrySendError::Full(request) | TrySendError::Disconnected(request)) => {
                         // Только последний запрос; UI обнаружит разрыв канала rx.
                         *slot = Some(request);
                     }

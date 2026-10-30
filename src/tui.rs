@@ -103,14 +103,8 @@ struct Search {
     truncated: bool,
 }
 enum Change {
-    Capture {
-        publish: bool,
-    },
-    Mutation {
-        source: String,
-        publish: bool,
-        editor: bool,
-    },
+    Capture { publish: bool },
+    Mutation { publish: bool, editor: bool },
 }
 struct Pending {
     id: u64,
@@ -290,23 +284,14 @@ impl Ui {
         self.message = "Сохранение… ввод ожидает подтверждения".into();
         Ok(())
     }
-    fn mutate(
-        &mut self,
-        worker: &mut Worker,
-        write: Write,
-        source: String,
-        publish: bool,
-        editor: bool,
-    ) -> Result<()> {
+    fn mutate(&mut self, worker: &mut Worker, write: Write) -> Result<()> {
+        let publish = matches!(write, Write::Publish { .. });
+        let editor = matches!(write, Write::Edit { .. });
         self.writing();
         let id = worker.write(write)?;
         self.pending = Some(Pending {
             id,
-            change: Change::Mutation {
-                source,
-                publish,
-                editor,
-            },
+            change: Change::Mutation { publish, editor },
         });
         self.message = if editor {
             "Редактор…"
@@ -371,13 +356,15 @@ impl Ui {
                                 || self.catalog.freshness.generation
                                     != catalog.freshness.generation;
                             self.catalog = catalog;
-                            self.by_path = self
-                                .catalog
-                                .records
-                                .iter()
-                                .enumerate()
-                                .map(|(i, r)| (r.path.clone(), i))
-                                .collect();
+                            if changed {
+                                self.by_path = self
+                                    .catalog
+                                    .records
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, r)| (r.path.clone(), i))
+                                    .collect();
+                            }
                             let records = self.records();
                             self.selected = records
                                 .iter()
@@ -445,11 +432,11 @@ impl Ui {
                             }
                             _ => {}
                         }
-                        self.selected = self
-                            .records()
+                        let records = self.records();
+                        self.selected = records
                             .iter()
                             .position(|r| path.as_deref() == Some(&r.path))
-                            .unwrap_or(self.selected.min(self.records().len().saturating_sub(1)));
+                            .unwrap_or(self.selected.min(records.len().saturating_sub(1)));
                         self.preview(worker, true);
                     }
                 }
@@ -503,13 +490,11 @@ impl Ui {
                         }
                         id
                     }
-                    Change::Mutation {
-                        source, publish, ..
-                    } => {
+                    Change::Mutation { publish, .. } => {
                         if publish {
                             self.inbox = false;
                         }
-                        source
+                        out.data["id"].as_str().unwrap_or("").to_owned()
                     }
                 };
                 self.report(Ok(out));
@@ -875,13 +860,7 @@ pub fn run(app: App, color: bool) -> Result<()> {
                                     })
                                 };
                                 if let Some(write) = write
-                                    && let Err(error) = ui.mutate(
-                                        &mut worker,
-                                        write,
-                                        picker.source,
-                                        picker.publish,
-                                        false,
-                                    )
+                                    && let Err(error) = ui.mutate(&mut worker, write)
                                 {
                                     ui.message = error_text(&error);
                                 }
@@ -988,9 +967,6 @@ pub fn run(app: App, color: bool) -> Result<()> {
                                                 source: id.clone(),
                                                 target: None,
                                             },
-                                            id,
-                                            true,
-                                            false,
                                         ) {
                                             ui.message = error_text(&error);
                                         }
@@ -998,13 +974,9 @@ pub fn run(app: App, color: bool) -> Result<()> {
                                     _ => {
                                         worker.cancel_reads();
                                         restore();
-                                        match ui.mutate(
-                                            &mut worker,
-                                            Write::Edit { source: id.clone() },
-                                            id,
-                                            false,
-                                            true,
-                                        ) {
+                                        match ui
+                                            .mutate(&mut worker, Write::Edit { source: id.clone() })
+                                        {
                                             Ok(()) => editor_active = true,
                                             Err(error) => {
                                                 session.resume()?;
