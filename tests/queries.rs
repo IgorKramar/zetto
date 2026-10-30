@@ -225,6 +225,17 @@ fn cached_show_and_preview_have_explicit_content_sources() {
     assert_eq!(cached.data["body"], first.data["body"]);
     assert_eq!(cached.freshness.generation, first.freshness.generation);
     assert_eq!(cached.freshness.mode, FreshnessMode::Cached);
+    let missing = app
+        .clone()
+        .with_freshness(FreshnessMode::Cached)
+        .show("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+        .unwrap_err();
+    assert_eq!(missing.code, "not_found");
+    assert_eq!(missing.context.freshness.mode, FreshnessMode::Cached);
+    assert_eq!(
+        missing.context.freshness.generation,
+        first.freshness.generation
+    );
     assert!(
         app.preview(path, &token)
             .unwrap()
@@ -248,4 +259,33 @@ fn cached_show_and_preview_have_explicit_content_sources() {
             .code,
         "interrupted"
     );
+}
+
+#[test]
+fn fuzzy_top_fifty_preserves_id_order_when_scores_tie() {
+    let (_dir, app, _root) = setup();
+    let mut ids = Vec::new();
+    for number in 1..=55u128 {
+        let id = ulid::Ulid::from(number).to_string();
+        let fields = serde_json::json!({"id":id,"title":"Нечёткий"});
+        fs::write(
+            app.vault
+                .root()
+                .join(zetto::format::filename(&id, "Нечёткий")),
+            zetto::format::render(fields.as_object().unwrap(), "").unwrap(),
+        )
+        .unwrap();
+        ids.push(id);
+    }
+    let found = app
+        .fuzzy_titles("нчтк", StageFilter::All, 50, &Cancellation::default())
+        .unwrap();
+    assert_eq!(
+        items(&found)
+            .iter()
+            .map(|r| r["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ids.iter().take(50).map(String::as_str).collect::<Vec<_>>()
+    );
+    assert!(found.truncated && !found.complete);
 }

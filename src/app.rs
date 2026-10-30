@@ -116,6 +116,26 @@ impl Record {
             stage,
         }
     }
+    pub(crate) fn from_read_error(path: String, error: Error) -> Self {
+        let mut diagnostic =
+            Diagnostic::new("zetto/file-read-error", Severity::Error, error.message);
+        diagnostic.path = Some(path.clone());
+        Self {
+            stage: if path.starts_with("inbox/") {
+                Stage::Inbox
+            } else {
+                Stage::Published
+            },
+            path,
+            raw: None,
+            readable: false,
+            tags: Vec::new(),
+            note: Note {
+                diagnostics: vec![diagnostic],
+                ..Note::default()
+            },
+        }
+    }
     pub fn id(&self) -> Option<&str> {
         self.note.id().filter(|id| {
             valid_id(id) && filename_id(&self.path) == Some(*id) && self.note.writable()
@@ -278,27 +298,7 @@ impl App {
                 String::from_utf8(b).map_err(|_| Error::new("validation_failed", "Файл не UTF-8"))
             }) {
                 Ok(raw) => records.push(Record::from_text(path, raw)),
-                Err(error) => {
-                    let mut d =
-                        Diagnostic::new("zetto/file-read-error", Severity::Error, error.message);
-                    d.path = Some(path.clone());
-                    let stage = if path.starts_with("inbox/") {
-                        Stage::Inbox
-                    } else {
-                        Stage::Published
-                    };
-                    records.push(Record {
-                        path,
-                        raw: None,
-                        readable: false,
-                        tags: Vec::new(),
-                        note: Note {
-                            diagnostics: vec![d],
-                            ..Note::default()
-                        },
-                        stage,
-                    });
-                }
+                Err(error) => records.push(Record::from_read_error(path, error)),
             }
         }
         derive_catalog(

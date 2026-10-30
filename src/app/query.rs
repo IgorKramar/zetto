@@ -32,7 +32,7 @@ impl App {
         self.freshness_mode = mode;
         self
     }
-    fn query_index(&self, token: &Cancellation) -> Result<(Index, Catalog)> {
+    fn query_index(&self, token: &Cancellation) -> Result<(Index, Option<Catalog>)> {
         token.check()?;
         if self.freshness_mode == FreshnessMode::NotApplicable {
             return Err(Error::new("usage", "Выберите full, stat или cached"));
@@ -43,11 +43,19 @@ impl App {
             Index::open(&self.vault)?
         };
         let config = VaultConfig::load(&self.vault)?;
-        let catalog = index.reconcile(&self.vault, &config, self.freshness_mode, token)?;
+        let catalog = if self.freshness_mode == FreshnessMode::Cached {
+            None
+        } else {
+            Some(index.reconcile(&self.vault, &config, self.freshness_mode, token)?)
+        };
         Ok((index, catalog))
     }
     pub fn catalog(&self, token: &Cancellation) -> Result<Catalog> {
-        self.query_index(token).map(|(_, catalog)| catalog)
+        let (mut index, catalog) = self.query_index(token)?;
+        match catalog {
+            Some(catalog) => Ok(catalog),
+            None => index.snapshot(),
+        }
     }
     pub fn preview(&self, path: &str, token: &Cancellation) -> Result<Record> {
         token.check()?;
@@ -63,8 +71,8 @@ impl App {
         let (mut index, observed) = self.query_index(token)?;
         let (mut catalog, body) = index
             .note_snapshot(id, token)
-            .map_err(|error| observed_error(error, &observed))?;
-        match_observation(&mut catalog, &observed);
+            .map_err(|error| observed_error(error, observed.as_ref(), &mut index))?;
+        match_observation(&mut catalog, observed.as_ref());
         let record = catalog.find(id)?;
         let mut data = record.data();
         data["body"] = json!(body);
@@ -136,8 +144,8 @@ impl App {
         if matches!(mode, SearchMode::Default | SearchMode::Fts) {
             let (mut catalog, hits) = index
                 .search_fts_snapshot(query, mode == SearchMode::Fts, limit + 1, offset, token)
-                .map_err(|error| observed_error(error, &observed))?;
-            match_observation(&mut catalog, &observed);
+                .map_err(|error| observed_error(error, observed.as_ref(), &mut index))?;
+            match_observation(&mut catalog, observed.as_ref());
             let records: BTreeMap<_, _> = catalog
                 .records
                 .iter()
@@ -155,7 +163,10 @@ impl App {
                 .collect();
             return Ok(page(&catalog, items, limit, offset));
         }
-        let mut catalog = observed;
+        let mut catalog = match observed {
+            Some(catalog) => catalog,
+            None => index.snapshot()?,
+        };
         if self.freshness_mode == FreshnessMode::Cached {
             catalog.warnings.push(Warning { code: "live_content".into(), message: "Список путей взят из cached; буквальный/regex поиск читает их текущее содержимое без сверки".into(), path: None });
         }
@@ -212,8 +223,8 @@ impl App {
         let (mut index, observed) = self.query_index(token)?;
         let (mut catalog, links) = index
             .links_snapshot(token)
-            .map_err(|error| observed_error(error, &observed))?;
-        match_observation(&mut catalog, &observed);
+            .map_err(|error| observed_error(error, observed.as_ref(), &mut index))?;
+        match_observation(&mut catalog, observed.as_ref());
         Ok((catalog, links))
     }
     pub fn links(
@@ -390,7 +401,14 @@ impl App {
                 matching.push((index, score));
             }
         }
-        matching.sort_by(|(a, sa), (b, sb)| sb.cmp(sa).then_with(|| a.cmp(b)));
+        let compare =
+            |(a, sa): &(usize, u32), (b, sb): &(usize, u32)| sb.cmp(sa).then_with(|| a.cmp(b));
+        let kept = limit.min(50) + 1;
+        if matching.len() > kept {
+            matching.select_nth_unstable_by(kept, compare);
+            matching.truncate(kept);
+        }
+        matching.sort_by(compare);
         let items = matching
             .into_iter()
             .take(limit.min(50) + 1)
@@ -449,7 +467,10 @@ fn page(catalog: &Catalog, mut items: Vec<Value>, limit: usize, offset: usize) -
     out.complete &= !truncated;
     out
 }
-fn match_observation(snapshot: &mut Catalog, observed: &Catalog) {
+fn match_observation(snapshot: &mut Catalog, observed: Option<&Catalog>) {
+    let Some(observed) = observed else {
+        return;
+    };
     if snapshot.freshness.generation == observed.freshness.generation
         && !snapshot.warnings.iter().any(|w| w.code == "index_stale")
     {
@@ -468,7 +489,18 @@ fn link_data(link: &IndexedLink, records: &BTreeMap<&str, &Record>) -> Value {
     json!({"source_id":records.get(link.source_path.as_str()).and_then(|r| r.note.id()),"source_path":link.source_path,"target":link.link.target,"kind":link.link.kind,"display":link.link.display,"span":link.link.span,"resolved_id":link.target_path.as_deref().and_then(|p| records.get(p)).and_then(|r| r.id()),"resolved_path":link.target_path,"reason":link.reason})
 }
 
-fn observed_error(mut error: Error, observed: &Catalog) -> Error {
+fn observed_error(mut error: Error, observed: Option<&Catalog>, index: &mut Index) -> Error {
+    let cached;
+    let observed = match observed {
+        Some(observed) => observed,
+        None => {
+            cached = match index.snapshot() {
+                Ok(cached) => cached,
+                Err(_) => return error,
+            };
+            &cached
+        }
+    };
     error.context.freshness = observed.freshness.clone();
     error.context.warnings.extend(observed.warnings.clone());
     error

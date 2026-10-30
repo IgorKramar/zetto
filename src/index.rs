@@ -1,8 +1,8 @@
 //! Удаляемый SQLite-кэш: файлы и recovery всегда остаются источником истины.
-use crate::app::{Catalog, Record, Stage, Warning, derive_catalog};
+use crate::app::{Catalog, Record, Warning, derive_catalog};
 use crate::config::VaultConfig;
 use crate::error::{Error, Result};
-use crate::note::{Diagnostic, Link, Note, Severity};
+use crate::note::Link;
 use crate::resolver::Resolver;
 use crate::vault::{Vault, hash};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior, params};
@@ -471,31 +471,11 @@ impl Index {
                     }
                     Err(e) if e.code == "interrupted" => return Err(e),
                     Err(error) => {
-                        let mut diagnostic = Diagnostic::new(
-                            "zetto/file-read-error",
-                            Severity::Error,
-                            error.message,
-                        );
-                        diagnostic.path = Some(path.clone());
                         changed_bodies.insert(path.clone(), (0, 0));
                         Entry {
                             stamp,
                             hash: None,
-                            record: Record {
-                                path: path.clone(),
-                                raw: None,
-                                readable: false,
-                                tags: Vec::new(),
-                                note: Note {
-                                    diagnostics: vec![diagnostic],
-                                    ..Default::default()
-                                },
-                                stage: if path.starts_with("inbox/") {
-                                    Stage::Inbox
-                                } else {
-                                    Stage::Published
-                                },
-                            },
+                            record: Record::from_read_error(path.clone(), error),
                         }
                     }
                 };
