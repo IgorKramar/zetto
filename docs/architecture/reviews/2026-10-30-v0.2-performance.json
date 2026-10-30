@@ -1,0 +1,290 @@
+{
+  "cli": {
+    "benchmark_version": 1,
+    "workload": "4k-3to10links",
+    "started_at": "2026-10-30T06:38:04.232556+00:00",
+    "platform": "Linux-7.2.8-9-omarchy-x86_64-with-glibc2.44",
+    "filesystem": "btrfs",
+    "binary_sha256": "bf7cb489fdc1709ba8ac5270c99827eb93ffd89304cd43c3cf3cb6babc3e6fcb",
+    "binary_version": "zetto 0.2.0-dev",
+    "cache": "прогретый файловый кэш ОС; новый SQLite при первом rebuild",
+    "measurements": {
+      "5000": {
+        "generator_version": 2,
+        "notes": 5000,
+        "resolved_edges": 32497,
+        "median_body_bytes": 4218.5,
+        "manifest_sha256": "e2b5cac25151d695b6ea5b1107efcbee678ff989a36431b2e9d9a77d76d5dfb6",
+        "rebuild_ms": 1672.544,
+        "rebuild_metrics": {
+          "files_read": 5000,
+          "files_seen": 5000,
+          "read_micros": 77184,
+          "walk_micros": 16408
+        },
+        "list_stat": {
+          "ms": [
+            190.571,
+            168.223,
+            181.081,
+            222.137,
+            186.262
+          ],
+          "p50_ms": 186.262,
+          "mode": "stat"
+        },
+        "list_cached": {
+          "ms": [
+            46.345,
+            40.076,
+            34.608,
+            35.049,
+            31.569
+          ],
+          "p50_ms": 35.049,
+          "mode": "cached"
+        },
+        "search_stat": {
+          "ms": [
+            179.425,
+            188.299,
+            164.989,
+            178.847,
+            157.221
+          ],
+          "p50_ms": 178.847,
+          "mode": "stat"
+        },
+        "search_cached": {
+          "ms": [
+            40.809,
+            36.584,
+            35.502,
+            32.268,
+            32.342
+          ],
+          "p50_ms": 35.502,
+          "mode": "cached"
+        },
+        "list_fresh": {
+          "ms": [
+            785.324,
+            277.3,
+            283.164,
+            263.21,
+            270.38
+          ],
+          "p50_ms": 277.3,
+          "mode": "full"
+        },
+        "max_child_peak_rss_kib_so_far": 65972,
+        "capture": {
+          "ms": [
+            73.437,
+            16.551,
+            16.068,
+            16.197,
+            15.943
+          ],
+          "p50_ms": 16.197,
+          "mode": "not_applicable"
+        }
+      },
+      "50000": {
+        "generator_version": 2,
+        "notes": 50000,
+        "resolved_edges": 324997,
+        "median_body_bytes": 4219.0,
+        "manifest_sha256": "c79e97a5fc10ce56312eafa56da435edfca2679aa1246326239b9cf53a7883f5",
+        "rebuild_ms": 14653.485,
+        "rebuild_metrics": {
+          "files_read": 50000,
+          "files_seen": 50000,
+          "read_micros": 616674,
+          "walk_micros": 113280
+        },
+        "list_stat": {
+          "ms": [
+            1218.409,
+            1208.138,
+            1206.77,
+            1212.862,
+            1216.518
+          ],
+          "p50_ms": 1212.862,
+          "mode": "stat"
+        },
+        "list_cached": {
+          "ms": [
+            244.35,
+            253.315,
+            249.991,
+            259.121,
+            247.828
+          ],
+          "p50_ms": 249.991,
+          "mode": "cached"
+        },
+        "search_stat": {
+          "ms": [
+            1473.023,
+            1459.014,
+            1419.003,
+            1460.903,
+            1444.279
+          ],
+          "p50_ms": 1459.014,
+          "mode": "stat"
+        },
+        "search_cached": {
+          "ms": [
+            293.644,
+            304.297,
+            294.385,
+            294.811,
+            306.298
+          ],
+          "p50_ms": 294.811,
+          "mode": "cached"
+        },
+        "list_fresh": {
+          "ms": [
+            2375.781,
+            2372.527,
+            2422.341,
+            2375.646,
+            2481.338
+          ],
+          "p50_ms": 2375.781,
+          "mode": "full"
+        },
+        "max_child_peak_rss_kib_so_far": 567768
+      }
+    }
+  },
+  "tui_steady": {
+    "binary_sha256": "81d083277fbec17f62899e19e5b72c5b3094795544ca47e3dc81d3c504d4dbc5",
+    "binary_version": "zetto 0.2.0-dev",
+    "periodic_full_seconds": 60,
+    "reader": "select waits for first bytes, drain without quiet tail; includes Python keeper and visible-cell parser",
+    "measurements": {
+      "5000": {
+        "navigation_during_refresh_ms": [
+          10.762,
+          11.869,
+          12.422,
+          12.965,
+          13.39,
+          10.074,
+          7.571,
+          7.607,
+          7.752,
+          7.92,
+          8.206,
+          8.704,
+          12.285,
+          15.868,
+          12.959,
+          10.803,
+          9.544,
+          9.794,
+          10.005,
+          10.249,
+          10.556,
+          10.628,
+          10.892,
+          11.156,
+          11.388,
+          11.662,
+          12.087,
+          12.326,
+          12.565,
+          12.621
+        ],
+        "navigation_p50_ms": 10.8475,
+        "navigation_p95_ms": 13.19875,
+        "idle_window_seconds": 66.00429793399962,
+        "idle_cpu_percent_one_core": 0.409,
+        "memory_kib": {
+          "VmHWM": 63760,
+          "VmRSS": 63760
+        }
+      },
+      "50000": {
+        "navigation_during_refresh_ms": [
+          61.107,
+          59.922,
+          57.946,
+          59.849,
+          51.36,
+          51.788,
+          62.488,
+          59.65,
+          57.687,
+          61.119,
+          57.441,
+          60.656,
+          51.819,
+          61.768,
+          57.131,
+          60.295,
+          58.518,
+          61.356,
+          58.209,
+          61.527,
+          62.007,
+          61.758,
+          58.25,
+          62.217,
+          61.713,
+          63.675,
+          59.492,
+          64.903,
+          63.552,
+          62.638
+        ],
+        "navigation_p50_ms": 60.4755,
+        "navigation_p95_ms": 63.61965,
+        "idle_window_seconds": 66.04459106500053,
+        "idle_cpu_percent_one_core": 3.891,
+        "memory_kib": {
+          "VmHWM": 508824,
+          "VmRSS": 459704
+        }
+      }
+    },
+    "useful_frame_5000_ms": [
+      233.293,
+      174.138,
+      173.633,
+      173.523,
+      223.856,
+      174.445,
+      223.39,
+      224.022,
+      173.52,
+      173.682
+    ],
+    "useful_frame_5000_p50_ms": 174.29149999999998,
+    "empty_loop_idle_window_seconds": 11.022919040000488,
+    "empty_loop_idle_cpu_percent_one_core": 0.0
+  },
+  "tui_startup": {
+    "binary_sha256": "bf7cb489fdc1709ba8ac5270c99827eb93ffd89304cd43c3cf3cb6babc3e6fcb",
+    "useful_frame_5000_ms": [
+      74.124,
+      74.319,
+      74.152,
+      74.762,
+      74.584,
+      74.744,
+      74.267,
+      79.786,
+      79.747,
+      128.048
+    ],
+    "p50_ms": 74.664,
+    "p95_ms": 106.33009999999999,
+    "reader": "select first bytes; no quiet tail; Python keeper included"
+  }
+}

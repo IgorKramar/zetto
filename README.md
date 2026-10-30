@@ -116,8 +116,8 @@ zetto --vault ./notes index rebuild
 
 Обычный запрос FTS экранируется; расширенный синтаксис включается только
 через `--fts`. FTS ищет слова с учётом Unicode, без русской лемматизации.
-Literal/regex читают файлы последовательно, включая frontmatter; отмена
-доступна через Ctrl-C, время ограничено 15 секундами. Теги объединяют YAML
+Literal/regex читают файлы последовательно, включая frontmatter; Ctrl-C и
+бюджет 15 секунд проверяются между файлами. Теги объединяют YAML
 и `#тег` вне кода, без записи inline-тегов в YAML.
 
 Обычный запрос сверяет наличие, размер и mtime. `--fresh` проверяет
@@ -198,6 +198,7 @@ PTY-проверка проходит ввод, редактор, связь и 
 Воспроизводимый прогон: `cargo build --release --locked`, затем
 `python3 tools/benchmark_cli.py NEW_DIR --binary target/release/zetto`.
 Выбирайте файловую систему для замера явно: `/tmp` может находиться в памяти.
+[Результаты и ограничения на 5k/50k](docs/architecture/reviews/2026-10-30-v0.2-verification.md).
 
 [Архитектура](ARCHITECTURE.md) · [format-v1](docs/format-v1.md) ·
 [план v0.2](docs/plans/2026-10-30-v0.2-search-index-concurrency.md) ·
