@@ -1,6 +1,6 @@
 [package]
 name = "zetto"
-version = "0.1.0-dev"
+version = "0.2.0-dev"
 edition = "2024"
 rust-version = "1.89"
 authors = ["Igor Kramar <i@ikramar.ru>"]
@@ -25,3 +25,7 @@ ctrlc = "3.5.2"
 ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
 crossterm = "0.29"
 unicode-segmentation = "1.12"
+rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "hooks"] }
+regex = "1.12"
+nucleo-matcher = "=0.3.1"
+notify = "=8.2.0"

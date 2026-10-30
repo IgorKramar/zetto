@@ -12,8 +12,235 @@ fn cli(vault: &std::path::Path, args: &[&str]) -> Output {
         .output()
         .unwrap()
 }
+
+#[cfg(unix)]
+#[test]
+fn invalid_utf8_vault_path_is_rejected_before_creating_notes() {
+    use std::os::unix::ffi::OsStrExt;
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join(std::ffi::OsStr::from_bytes(b"bad-\xff"));
+    let out = cli(&path, &["init"]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert_eq!(json(&out)["error"]["code"], "invalid_config");
+    assert!(!path.exists());
+}
 fn json(out: &Output) -> Value {
     serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {:?}", out))
+}
+
+#[test]
+fn query_commands_expose_generation_and_machine_formats() {
+    let temp = TempDir::new().unwrap();
+    let root = json(&cli(temp.path(), &["init"]))["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let draft = json(&cli(
+        temp.path(),
+        &[
+            "capture",
+            "alpha.*beta #мысль `#код`",
+            "--title",
+            "Кириллица",
+        ],
+    ));
+    let id = draft["data"]["id"].as_str().unwrap();
+    assert!(cli(temp.path(), &["link", id, &root]).status.success());
+    assert!(cli(temp.path(), &["publish", id]).status.success());
+    assert!(
+        cli(temp.path(), &["capture", "alphaXYZbeta alpha"])
+            .status
+            .success()
+    );
+    let searched = cli(temp.path(), &["search", "alpha", "--limit=1"]);
+    assert!(searched.status.success(), "{searched:?}");
+    let searched = json(&searched);
+    assert_eq!(searched["freshness"]["mode"], "stat");
+    assert!(searched["freshness"]["generation"].is_i64());
+    assert_eq!(searched["truncated"], true);
+    assert_eq!(searched["data"]["next_offset"], 1);
+    let next = json(&cli(
+        temp.path(),
+        &["search", "alpha", "--limit=1", "--offset=1"],
+    ));
+    assert_ne!(
+        searched["data"]["items"][0]["id"],
+        next["data"]["items"][0]["id"]
+    );
+    assert_eq!(
+        json(&cli(temp.path(), &["search", "alpha.*beta", "--literal"]))["data"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        json(&cli(temp.path(), &["search", "alpha.*beta", "--regex"]))["data"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        json(&cli(temp.path(), &["search", "Кириллица", "--fts"]))["data"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    for args in [
+        vec!["search", "[", "--regex"],
+        vec!["search", "\"", "--fts"],
+        vec!["search", "x", "--literal", "--regex"],
+        vec!["graph", id, "--depth=4"],
+        vec!["--fresh", "--cached", "list"],
+    ] {
+        let out = cli(temp.path(), &args);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
+        assert_eq!(json(&out)["error"]["code"], "usage");
+    }
+    let links = json(&cli(temp.path(), &["links", &root, "--direction=incoming"]));
+    assert_eq!(links["data"]["items"][0]["source_id"], id);
+    assert_eq!(links["data"]["items"][0]["resolved_id"], root);
+    let graph = json(&cli(temp.path(), &["graph", &root]));
+    assert_eq!(graph["data"]["nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        json(&cli(temp.path(), &["tags"]))["data"]["items"],
+        serde_json::json!([{"tag":"мысль","count":1}])
+    );
+    let rebuilt = json(&cli(temp.path(), &["index", "rebuild"]));
+    assert_eq!(rebuilt["freshness"]["mode"], "full");
+    let generation = rebuilt["freshness"]["generation"].clone();
+    assert!(
+        cli(temp.path(), &["capture", "cached later"])
+            .status
+            .success()
+    );
+    let cached = json(&cli(temp.path(), &["--cached", "search", "later"]));
+    assert_eq!(cached["freshness"]["mode"], "cached");
+    assert_eq!(cached["freshness"]["generation"], generation);
+    assert!(cached["data"]["items"].as_array().unwrap().is_empty());
+    assert!(
+        cached["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["code"] == "index_stale")
+    );
+    let fresh = json(&cli(temp.path(), &["--fresh", "search", "later"]));
+    assert_eq!(fresh["freshness"]["mode"], "full");
+    assert_eq!(fresh["data"]["items"].as_array().unwrap().len(), 1);
+    for args in [
+        vec!["search", "нет-выдачи"],
+        vec!["links", &root],
+        vec!["graph", &root],
+        vec!["tags"],
+        vec!["path", &root],
+        vec!["index", "rebuild"],
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_zetto"))
+            .args(["--vault", temp.path().to_str().unwrap(), "--format=jsonl"])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        let rows: Vec<Value> = String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.last().unwrap()["type"], "summary");
+        assert!(rows.last().unwrap()["data"]["freshness"]["generation"].is_i64());
+    }
+}
+
+#[test]
+fn paths_are_plain_or_nul_and_cached_is_visible_to_people() {
+    let temp = TempDir::new().unwrap();
+    let vault_path = temp.path().join("Заметки 東京");
+    let root = json(&cli(&vault_path, &["init"]))["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let missing = cli(&vault_path, &["--cached", "list"]);
+    assert_eq!(missing.status.code(), Some(4));
+    assert_eq!(json(&missing)["error"]["code"], "index_unavailable");
+    let record = json(&cli(&vault_path, &["show", &root]));
+    let path = std::fs::canonicalize(&vault_path)
+        .unwrap()
+        .join(record["data"]["path"].as_str().unwrap());
+    for (suffix, separator) in [(vec![], b'\n'), (vec!["--null"], 0)] {
+        let out = Command::new(env!("CARGO_BIN_EXE_zetto"))
+            .arg("--vault")
+            .arg(&vault_path)
+            .args(["path", &root])
+            .args(suffix)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let mut expected = path.to_str().unwrap().as_bytes().to_vec();
+        expected.push(separator);
+        assert_eq!(out.stdout, expected);
+    }
+    assert_eq!(
+        cli(&vault_path, &["path", &root, "--null"]).status.code(),
+        Some(2)
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_zetto"))
+        .arg("--vault")
+        .arg(&vault_path)
+        .args(["--cached", "list"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(String::from_utf8(out.stderr).unwrap().contains("cached"));
+    cli(&vault_path, &["capture", "#мысль"]);
+    let out = Command::new(env!("CARGO_BIN_EXE_zetto"))
+        .arg("--vault")
+        .arg(&vault_path)
+        .arg("tags")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("ТЕГ") && text.contains("мысль\t1"), "{text}");
+}
+
+#[test]
+fn index_warnings_survive_saved_errors_and_new_flow() {
+    let temp = TempDir::new().unwrap();
+    let root = json(&cli(temp.path(), &["init"]))["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    cli(temp.path(), &["list"]);
+    let vault = zetto::vault::Vault::open(temp.path()).unwrap();
+    let index =
+        rusqlite::Connection::open(zetto::index::Index::cache_path(&vault).unwrap()).unwrap();
+    index.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let out = cli(
+        temp.path(),
+        &["new", "сохранить даже при ошибке", "--link", &root],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let result = json(&out);
+    assert_eq!(result["saved"], true);
+    assert!(
+        result["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["code"] == "index_stale"),
+        "{result}"
+    );
+    assert_eq!(result["freshness"]["mode"], "not_applicable");
+    let saved = result["data"]["path"].as_str().unwrap();
+    assert!(
+        std::fs::read_to_string(temp.path().join(saved))
+            .unwrap()
+            .contains("сохранить даже при ошибке")
+    );
+    index.execute_batch("ROLLBACK").unwrap();
 }
 #[test]
 fn cycle_and_saved_draft() {
@@ -128,7 +355,6 @@ fn syntax_and_non_tty_are_structured() {
         vec!["wat"],
         vec!["list", "--limit", "0"],
         vec!["show", "../../evil"],
-        vec!["--cached", "list"],
         vec!["capture"],
         vec!["edit", "01ARZ3NDEKTSV4RRFFQ69G5FAV"],
         vec![],

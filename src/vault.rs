@@ -91,11 +91,23 @@ pub fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+fn check_root_encoding(path: &Path) -> Result<()> {
+    if path.to_str().is_none() {
+        return Err(Error::new(
+            "invalid_config",
+            "Путь хранилища должен быть UTF-8",
+        ));
+    }
+    Ok(())
+}
+
 impl Vault {
     pub fn open(path: &Path) -> Result<Self> {
+        check_root_encoding(path)?;
         let root = path
             .canonicalize()
             .map_err(|e| Error::new("io", format!("{}: {e}", path.display())))?;
+        check_root_encoding(&root)?;
         if !root.is_dir() {
             return Err(Error::new(
                 "invalid_config",
@@ -779,6 +791,7 @@ impl Vault {
     }
 
     pub fn initialize(path: &Path, root_name: &str, bytes: &[u8], config: &str) -> Result<Self> {
+        check_root_encoding(path)?;
         if !path.exists() {
             fs::create_dir_all(path)?;
         }

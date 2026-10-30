@@ -515,3 +515,31 @@ fn editor_success_failure_and_conflict_preserve_data() {
             .is_ok_and(|b| String::from_utf8_lossy(&b).contains("Editor version"))
     }));
 }
+
+#[test]
+fn capture_reports_index_failure_after_confirmed_file_save() {
+    let (_dir, app, _root) = setup();
+    let token = zetto::index::Cancellation::default();
+    let mut index = zetto::index::Index::open(&app.vault).unwrap();
+    index
+        .reconcile(
+            &app.vault,
+            &app.config,
+            zetto::index::FreshnessMode::Stat,
+            &token,
+        )
+        .unwrap();
+    let other = rusqlite::Connection::open(index.path()).unwrap();
+    other.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let out = app
+        .capture("Сохранить", "не потерять при отказе индекса")
+        .unwrap();
+    assert!(out.saved);
+    assert!(out.warnings.iter().any(|w| w.code == "index_stale"));
+    assert!(
+        String::from_utf8(app.vault.read(out.data["path"].as_str().unwrap()).unwrap())
+            .unwrap()
+            .contains("не потерять")
+    );
+    other.execute_batch("ROLLBACK").unwrap();
+}
